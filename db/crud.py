@@ -19,9 +19,12 @@ def get_engine():
     return _engine
 
 
+def _session():
+    return Session(get_engine(), expire_on_commit=False)
+
+
 def upsert_diet_record(data: dict, image_path: str, raw_response: str) -> DietRecord:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         record_date = _parse_date(data.get("date"))
         existing = session.scalar(select(DietRecord).where(DietRecord.date == record_date))
 
@@ -56,8 +59,7 @@ def upsert_diet_record(data: dict, image_path: str, raw_response: str) -> DietRe
 
 
 def upsert_body_composition(data: dict, image_path: str, raw_response: str) -> BodyComposition:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         record_date = _parse_date(data.get("date"))
         existing = session.scalar(select(BodyComposition).where(BodyComposition.date == record_date))
 
@@ -95,8 +97,7 @@ def upsert_body_composition(data: dict, image_path: str, raw_response: str) -> B
 
 
 def save_workout(data: dict) -> WorkoutRecord:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         record_date = _parse_date(data.get("date"))
         rec = WorkoutRecord(
             date=record_date,
@@ -116,20 +117,17 @@ def save_workout(data: dict) -> WorkoutRecord:
 
 
 def get_diet_record(target_date: date) -> DietRecord | None:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         return session.scalar(select(DietRecord).where(DietRecord.date == target_date))
 
 
 def get_latest_body_composition() -> BodyComposition | None:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         return session.scalar(select(BodyComposition).order_by(desc(BodyComposition.date)).limit(1))
 
 
 def get_body_compositions_range(start: date, end: date) -> list[BodyComposition]:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         rows = session.scalars(
             select(BodyComposition)
             .where(BodyComposition.date >= start, BodyComposition.date <= end)
@@ -139,8 +137,7 @@ def get_body_compositions_range(start: date, end: date) -> list[BodyComposition]
 
 
 def get_diet_records_range(start: date, end: date) -> list[DietRecord]:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         rows = session.scalars(
             select(DietRecord)
             .where(DietRecord.date >= start, DietRecord.date <= end)
@@ -150,8 +147,7 @@ def get_diet_records_range(start: date, end: date) -> list[DietRecord]:
 
 
 def get_workouts_range(start: date, end: date) -> list[WorkoutRecord]:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         rows = session.scalars(
             select(WorkoutRecord)
             .where(WorkoutRecord.date >= start, WorkoutRecord.date <= end)
@@ -161,14 +157,12 @@ def get_workouts_range(start: date, end: date) -> list[WorkoutRecord]:
 
 
 def get_daily_summary(target_date: date) -> DailySummary | None:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         return session.get(DailySummary, target_date)
 
 
 def get_daily_summaries_range(start: date, end: date) -> list[DailySummary]:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         rows = session.scalars(
             select(DailySummary)
             .where(DailySummary.date >= start, DailySummary.date <= end)
@@ -178,8 +172,7 @@ def get_daily_summaries_range(start: date, end: date) -> list[DailySummary]:
 
 
 def quick_weight_entry(target_date: date, weight_kg: float) -> None:
-    engine = get_engine()
-    with Session(engine) as session:
+    with _session() as session:
         existing = session.scalar(select(BodyComposition).where(BodyComposition.date == target_date))
         if existing:
             existing.weight_kg = weight_kg

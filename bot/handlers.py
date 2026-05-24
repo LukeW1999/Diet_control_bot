@@ -143,15 +143,19 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         temp_b64 = base64.b64encode(bytes(image_bytes)).decode()
         image_type = await parsers.classify_image(temp_b64)
 
+        today_str = str(date.today())
+
         if image_type == "diet":
             filepath, b64 = save_and_encode(bytes(image_bytes), "diet")
             data, raw = await parsers.parse_diet_image(b64)
+            data["date"] = today_str  # always use send date
             rec = crud.upsert_diet_record(data, filepath, raw)
             reply = _format_diet_reply(data, rec)
 
         elif image_type == "body":
             filepath, b64 = save_and_encode(bytes(image_bytes), "body")
             data, raw = await parsers.parse_body_composition_image(b64)
+            data["date"] = today_str  # always use send date
             prev = crud.get_latest_body_composition()
             rec = crud.upsert_body_composition(data, filepath, raw)
             reply = _format_body_reply(rec, prev)
