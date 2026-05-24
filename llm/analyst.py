@@ -79,8 +79,8 @@ async def _grep_skill(question: str) -> str:
         keyword = instruction[7:].strip()
         entries = search(keyword)
         if not entries:
-            return f"日志里没有找到"{keyword}"的记录"
-        return f'包含"{keyword}"的记录共{len(entries)}次：\n\n' + "\n\n".join(entries)
+            return f"日志里没有找到「{keyword}」的记录"
+        return f"包含「{keyword}」的记录共{len(entries)}次：\n\n" + "\n\n".join(entries)
 
     # NONE or unrecognized
     entries = get_recent(3)
