@@ -741,23 +741,7 @@ def _build_context() -> dict:
             for r in body_history
         ]
         # Pre-compute weight trend so LLM doesn't do the math
-        records_with_weight = [r for r in body_history if r.weight_kg is not None]
-        if len(records_with_weight) >= 2:
-            first = records_with_weight[0]
-            last = records_with_weight[-1]
-            days = (last.date - first.date).days
-            weight_change = last.weight_kg - first.weight_kg
-            weeks = days / 7
-            ctx["weight_trend"] = {
-                "from_date": str(first.date),
-                "to_date": str(last.date),
-                "from_weight_kg": first.weight_kg,
-                "to_weight_kg": last.weight_kg,
-                "total_change_kg": round(weight_change, 2),
-                "days": days,
-                "weeks": round(weeks, 1),
-                "kg_per_week": round(weight_change / weeks, 2) if weeks > 0 else None,
-            }
+        pass  # weight_trend now handled by stats_cache (utils/stats.py)
     if today_diet:
         ctx["today_diet"] = {
             "total_calories": today_diet.total_calories,

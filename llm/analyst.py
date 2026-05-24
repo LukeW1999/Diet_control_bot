@@ -391,14 +391,15 @@ def _format_context(ctx: dict) -> str:
         )
     if ctx.get("week_avg_deficit"):
         lines.append(f"本周平均热量缺口：{ctx['week_avg_deficit']:.0f}kcal/天")
-    if ctx.get("weight_trend"):
-        t = ctx["weight_trend"]
-        direction = "减重" if t["total_change_kg"] < 0 else "增重"
+
+    # Pre-computed stats cache — LLM must use these numbers directly, no recalculation
+    from utils.stats import load_stats_cache
+    import json as _json
+    cache = load_stats_cache()
+    if cache:
         lines.append(
-            f"\n体重趋势（已由程序精确计算，直接使用以下数字，不要自行重新计算）：\n"
-            f"  {t['from_date']} → {t['to_date']}，共 {t['days']} 天（{t['weeks']} 周）\n"
-            f"  {t['from_weight_kg']}kg → {t['to_weight_kg']}kg，"
-            f"{direction} {abs(t['total_change_kg'])} kg，"
-            f"平均每周 {abs(t['kg_per_week'])} kg"
+            "\n【健康数据统计（Python精确计算，直接引用，不要自行重新计算）】\n"
+            + _json.dumps(cache, ensure_ascii=False, indent=2)
         )
+
     return "\n".join(lines) if lines else "暂无数据"

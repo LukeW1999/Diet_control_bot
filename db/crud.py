@@ -99,6 +99,13 @@ def upsert_body_composition(data: dict, image_path: str, raw_response: str) -> B
             summary.updated_at = datetime.utcnow()
             session.commit()
 
+        # Refresh stats cache whenever body data changes
+        try:
+            from utils.stats import compute_and_save
+            compute_and_save()
+        except Exception:
+            pass
+
         return rec
 
 
