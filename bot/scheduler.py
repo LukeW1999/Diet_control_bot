@@ -53,6 +53,7 @@ def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
 
 
 async def _morning_check(bot: Bot, chat_id: str) -> None:
+    from utils.weather import get_london_weather, format_weather
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
     body = crud.get_latest_body_composition()
@@ -60,6 +61,14 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
 
     lines = ["早上好！☀️\n"]
 
+    # Weather
+    try:
+        weather = await get_london_weather()
+        lines.append(format_weather(weather) + "\n")
+    except Exception:
+        pass
+
+    # Yesterday's data
     if diet:
         net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
         deficit = bmr - net
@@ -79,7 +88,7 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         "今天目标：",
         f"• 蛋白质 ≥ {protein_goal:.0f}g",
         f"• 热量控制在 {bmr - 500:.0f}–{bmr - 300:.0f} kcal",
-        "\n记得发今天的饮食截图 📸",
+        "\n今天心情怎么样？随手记点什么都行 📔",
     ]
 
     await bot.send_message(chat_id=chat_id, text="\n".join(lines))

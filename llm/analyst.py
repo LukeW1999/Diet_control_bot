@@ -3,6 +3,32 @@ from datetime import date, timedelta
 from .client import text_call
 from utils.food_log import search, get_recent, get_by_date, get_high_calorie_days
 
+_DIARY_SYSTEM = """用户发来了一段文字，可能是今天的日记或心情记录。
+请提取以下信息，以JSON返回，不要返回其他内容：
+{
+  "is_diary": true/false,
+  "mood": "用一个词描述心情，如：好/累/焦虑/开心/一般/烦躁/平静",
+  "mood_score": 1-5的整数（1最差，5最好），
+  "content": "日记正文（原文保留）"
+}
+
+如果这段文字明显不是日记/心情记录（比如问问题、发指令），返回 {"is_diary": false}"""
+
+
+async def detect_diary(text: str) -> dict | None:
+    """Return diary info if text looks like a diary entry, else None."""
+    if len(text) < 3:
+        return None
+    raw = await text_call(_DIARY_SYSTEM, text)
+    try:
+        import json, re
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group()) if m else {}
+        return data if data.get("is_diary") else None
+    except Exception:
+        return None
+
+
 _CORRECT_SYSTEM = """你是一个数据纠错助手。用户想修正他的健康记录中某个字段的值。
 
 已知字段映射（中文 → 数据库字段名）：

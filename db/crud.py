@@ -3,7 +3,7 @@ import os
 from datetime import date, datetime
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
-from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary
+from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary, DiaryEntry
 from utils.food_log import write_entry as write_food_log
 
 
@@ -195,6 +195,30 @@ def quick_weight_entry(target_date: date, weight_kg: float) -> None:
             session.add(summary)
 
         session.commit()
+
+
+def save_diary(entry_date: date, content: str, mood: str = None, mood_score: int = None) -> DiaryEntry:
+    with _session() as session:
+        rec = DiaryEntry(
+            date=entry_date,
+            content=content,
+            mood=mood,
+            mood_score=mood_score,
+            created_at=datetime.utcnow(),
+        )
+        session.add(rec)
+        session.commit()
+        return rec
+
+
+def get_diary_entries(start: date, end: date) -> list[DiaryEntry]:
+    with _session() as session:
+        rows = session.scalars(
+            select(DiaryEntry)
+            .where(DiaryEntry.date >= start, DiaryEntry.date <= end)
+            .order_by(DiaryEntry.date)
+        ).all()
+        return list(rows)
 
 
 def apply_correction(table: str, field: str, value, record_date: date) -> bool:

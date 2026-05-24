@@ -189,6 +189,20 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     text = update.message.text.strip()
 
+    # Diary / mood entry detection
+    diary = await analyst.detect_diary(text)
+    if diary:
+        from db.crud import save_diary
+        rec = save_diary(
+            entry_date=date.today(),
+            content=diary.get("content", text),
+            mood=diary.get("mood"),
+            mood_score=diary.get("mood_score"),
+        )
+        mood_str = f"心情：{rec.mood}（{rec.mood_score}/5）" if rec.mood else ""
+        await update.message.reply_text(f"📔 日记已记录 {rec.date}\n{mood_str}")
+        return
+
     # Correction intent: "内脏脂肪应该是13" / "体脂率错了，是29.2"
     correction = await analyst.detect_correction(text)
     if correction:

@@ -104,6 +104,17 @@ class DailySummary(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class DiaryEntry(Base):
+    __tablename__ = "diary_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    mood = Column(String)        # 心情关键词，如 "好" / "累" / "焦虑"
+    mood_score = Column(Integer) # 1-5 分
+    content = Column(Text)       # 日记正文
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 def init_db(db_path: str) -> None:
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
