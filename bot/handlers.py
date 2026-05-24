@@ -354,7 +354,7 @@ def _format_body_reply(rec, prev) -> str:
         "✅ 身体成分已记录\n",
         f"📅 {rec.date}",
         f"⚖️ 体重：{rec.weight_kg} kg（变化：{delta(rec.weight_kg, prev_weight, 'kg')}）",
-        f"💪 肌肉量：{rec.muscle_mass_kg} kg（变化：{delta(rec.muscle_mass_kg, prev_muscle, 'kg')}）",
+        f"💪 骨骼肌量：{rec.skeletal_muscle_kg} kg（变化：{delta(rec.skeletal_muscle_kg, prev_muscle, 'kg')}）",
         f"🫧 体脂率：{rec.body_fat_pct}%（变化：{delta(rec.body_fat_pct, prev_fat, '%')}）",
     ]
 
