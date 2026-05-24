@@ -49,18 +49,20 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         f"• 热量控制在 {bmr - 500:.0f}–{bmr - 300:.0f} kcal",
     ]
 
-    # Zarathustra quote
-    quote = get_random_quote()
-    if quote:
+    # Daily quote from random book
+    result = get_random_quote()
+    if result:
+        quote, source = result
         try:
             commentary = await generate_morning_quote_commentary(quote)
             lines += [
                 "\n📖 今日金句",
                 f"「{quote}」",
+                f"——{source}",
                 f"\n{commentary}",
             ]
         except Exception:
-            lines += ["\n📖 今日金句", f"「{quote}」"]
+            lines += ["\n📖 今日金句", f"「{quote}」", f"——{source}"]
 
     lines.append("\n今天状态怎么样？有什么想说的也可以发给我 📔")
 
