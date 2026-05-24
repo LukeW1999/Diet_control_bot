@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Album (multi-photo) state: media_group_id -> {images, update, wait_msg}
 _pending_albums: dict = {}
+_background_tasks: set = set()  # keep task references to prevent GC
 
 
 def _allowed(update: Update) -> bool:
@@ -231,7 +232,9 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "ctx": ctx,
                 "wait_msg": wait_msg,
             }
-            asyncio.create_task(_process_album_delayed(media_group_id))
+            task = asyncio.create_task(_process_album_delayed(media_group_id))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
         else:
             _pending_albums[media_group_id]["images"].append(b64)
     else:
