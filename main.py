@@ -7,6 +7,7 @@ load_dotenv()
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from bot.handlers import (
     cmd_start, cmd_today, cmd_week, cmd_body, cmd_workout, cmd_report,
+    cmd_profile, cmd_update,
     handle_photo, handle_text, handle_callback,
 )
 from bot.scheduler import start_scheduler
@@ -33,6 +34,8 @@ def main() -> None:
     app.add_handler(CommandHandler("body", cmd_body))
     app.add_handler(CommandHandler("workout", cmd_workout))
     app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("profile", cmd_profile))
+    app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))

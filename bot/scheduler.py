@@ -76,7 +76,7 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
     body = crud.get_latest_body_composition()
-    bmr = float(os.getenv("USER_BMR", 1916))
+    bmr = crud.get_bmr()
 
     lines = ["早上好！☀️\n"]
 
@@ -116,7 +116,7 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
 async def _evening_summary(bot: Bot, chat_id: str) -> None:
     today = date.today()
     diet = crud.get_diet_record(today)
-    bmr = float(os.getenv("USER_BMR", 1916))
+    bmr = crud.get_bmr()
 
     # ── 过去30天（只统计有记录的天）──────────────────────────
     month_start = today - timedelta(days=29)

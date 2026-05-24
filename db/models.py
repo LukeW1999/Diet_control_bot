@@ -115,6 +115,18 @@ class DiaryEntry(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class UserProfile(Base):
+    __tablename__ = "user_profile"
+
+    id = Column(Integer, primary_key=True, default=1)
+    age = Column(Integer)
+    height_cm = Column(Float)
+    gender = Column(String, default="male")   # male / female
+    weight_goal_kg = Column(Float)
+    protein_goal_per_kg = Column(Float)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 def init_db(db_path: str) -> None:
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)

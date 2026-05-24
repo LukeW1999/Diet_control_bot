@@ -40,9 +40,87 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  • 训练记录（如 深蹲80kg 5组5次）\n"
         "  • 今天体重 91.2\n"
         "  • 任何关于你健康数据的问题\n\n"
-        "📋 指令：/today /week /body /workout /report",
+        "📋 指令：/today /week /body /workout /report /profile /update\n\n"
+        "💡 /profile 查看个人资料和当前 BMR\n"
+        "/update age 27 · /update height 172 · /update gender male\n"
+        "/update goal 74.8 · /update protein 1.8",
         parse_mode="Markdown",
         reply_markup=main_menu(),
+    )
+
+
+async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _allowed(update):
+        return
+    p = crud.get_user_profile()
+    body = crud.get_latest_body_composition()
+    bmr = crud.get_bmr()
+
+    lines = ["👤 个人资料\n"]
+    if p:
+        if p.age:
+            lines.append(f"年龄：{p.age} 岁")
+        if p.height_cm:
+            lines.append(f"身高：{p.height_cm} cm")
+        if p.gender:
+            lines.append(f"性别：{'男' if p.gender == 'male' else '女'}")
+        if p.weight_goal_kg:
+            lines.append(f"目标体重：{p.weight_goal_kg} kg")
+        if p.protein_goal_per_kg:
+            lines.append(f"蛋白质目标：{p.protein_goal_per_kg} g/kg")
+    else:
+        lines.append("（还没有资料，用 /update 设置）")
+
+    weight_str = f"（当前体重 {body.weight_kg} kg）" if body and body.weight_kg else ""
+    lines.append(f"\n🔥 当前基础代谢：{bmr:.0f} kcal/天 {weight_str}")
+
+    if not (p and p.age and p.height_cm):
+        lines.append("\n💡 设置资料后 BMR 将自动随体重变化：\n/update age 27\n/update height 172\n/update gender male")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _allowed(update):
+        return
+    args = ctx.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "用法：\n"
+            "/update age 27\n"
+            "/update height 172\n"
+            "/update gender male\n"
+            "/update goal 74.8\n"
+            "/update protein 1.8"
+        )
+        return
+
+    key_map = {
+        "age": ("age", int, "岁"),
+        "height": ("height_cm", float, "cm"),
+        "gender": ("gender", str, ""),
+        "goal": ("weight_goal_kg", float, "kg"),
+        "protein": ("protein_goal_per_kg", float, "g/kg"),
+    }
+
+    key = args[0].lower()
+    raw = args[1]
+
+    if key not in key_map:
+        await update.message.reply_text(f"未知字段 {key}，可用：age / height / gender / goal / protein")
+        return
+
+    field, cast, unit = key_map[key]
+    try:
+        value = cast(raw)
+    except ValueError:
+        await update.message.reply_text(f"数值格式不对：{raw}")
+        return
+
+    crud.update_user_profile(**{field: value})
+    bmr = crud.get_bmr()
+    await update.message.reply_text(
+        f"✅ 已更新 {key} = {value}{unit}\n🔥 当前 BMR：{bmr:.0f} kcal/天"
     )
 
 
@@ -435,7 +513,7 @@ def _build_today_summary(today: date) -> str:
     lines = [f"📅 今日汇总（{today}）\n"]
 
     if diet:
-        bmr = float(os.getenv("USER_BMR", 1916))
+        bmr = crud.get_bmr()
         net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
         deficit = bmr - net
         lines += [
@@ -497,7 +575,7 @@ async def _generate_report() -> str:
     body_records = crud.get_body_compositions_range(start, today)
     workout_records = crud.get_workouts_range(start, today)
 
-    bmr = float(os.getenv("USER_BMR", 1916))
+    bmr = crud.get_bmr()
 
     user_data = {
         "diet_records": [

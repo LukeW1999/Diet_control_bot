@@ -3,7 +3,7 @@ import os
 from datetime import date, datetime
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
-from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary, DiaryEntry
+from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary, DiaryEntry, UserProfile
 from utils.food_log import write_entry as write_food_log
 
 
@@ -240,6 +240,41 @@ def apply_correction(table: str, field: str, value, record_date: date) -> bool:
                 session.commit()
                 return True
     return False
+
+
+def get_user_profile() -> UserProfile | None:
+    with _session() as session:
+        return session.get(UserProfile, 1)
+
+
+def update_user_profile(**kwargs) -> UserProfile:
+    with _session() as session:
+        rec = session.get(UserProfile, 1)
+        if not rec:
+            rec = UserProfile(id=1)
+            session.add(rec)
+        for k, v in kwargs.items():
+            if hasattr(rec, k):
+                setattr(rec, k, v)
+        rec.updated_at = datetime.utcnow()
+        session.commit()
+        session.refresh(rec)
+        return rec
+
+
+def get_bmr() -> float:
+    """Calculate BMR from user profile + latest weight. Falls back to .env USER_BMR."""
+    profile = get_user_profile()
+    body = get_latest_body_composition()
+    weight = body.weight_kg if body else None
+
+    if profile and profile.age and profile.height_cm and weight:
+        # Mifflin-St Jeor
+        bmr = 10 * weight + 6.25 * profile.height_cm - 5 * profile.age
+        bmr += 5 if (profile.gender or "male") == "male" else -161
+        return round(bmr, 1)
+
+    return float(os.getenv("USER_BMR", 1916))
 
 
 def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
