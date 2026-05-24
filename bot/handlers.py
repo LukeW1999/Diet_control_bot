@@ -350,8 +350,17 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             mood_score=diary.get("mood_score"),
         )
         mood_str = f"心情：{rec.mood}（{rec.mood_score}/5）" if rec.mood else ""
-        response = await analyst.generate_diary_response(diary.get("content", text), diary.get("mood", ""))
+        from utils.psych_memory import load_psych_memory, save_psych_memory
+        memory = load_psych_memory()
+        response = await analyst.generate_diary_response(diary.get("content", text), diary.get("mood", ""), memory)
         await update.message.reply_text(f"📔 {rec.date} {mood_str}\n\n{response}")
+        async def _update_memory():
+            new_mem = await analyst.update_psych_memory(memory, diary.get("content", text), diary.get("mood", ""))
+            if new_mem:
+                save_psych_memory(new_mem)
+        task = asyncio.create_task(_update_memory())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
         return
 
     # Correction intent: "内脏脂肪应该是13" / "体脂率错了，是29.2"

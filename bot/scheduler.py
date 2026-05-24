@@ -73,12 +73,14 @@ def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
 
 async def _morning_check(bot: Bot, chat_id: str) -> None:
     from utils.weather import get_london_weather, format_weather
+    from utils.quotes import get_random_quote
+    from llm.analyst import generate_morning_quote_commentary
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
     body = crud.get_latest_body_composition()
     bmr = crud.get_bmr()
 
-    lines = ["早上好。新的一天，新的机会。☀️\n"]
+    lines = ["早上好。☀️\n"]
 
     # Weather
     try:
@@ -107,8 +109,22 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         "今天的任务：",
         f"• 蛋白质 ≥ {protein_goal:.0f}g，不达标就是欠债",
         f"• 热量控制在 {bmr - 500:.0f}–{bmr - 300:.0f} kcal",
-        "\n今天状态怎么样？有什么想说的也可以发给我 📔",
     ]
+
+    # Zarathustra quote
+    quote = get_random_quote()
+    if quote:
+        try:
+            commentary = await generate_morning_quote_commentary(quote)
+            lines += [
+                "\n📖 今日金句",
+                f"「{quote}」",
+                f"\n{commentary}",
+            ]
+        except Exception:
+            lines += ["\n📖 今日金句", f"「{quote}」"]
+
+    lines.append("\n今天状态怎么样？有什么想说的也可以发给我 📔")
 
     await bot.send_message(chat_id=chat_id, text="\n".join(lines))
 
