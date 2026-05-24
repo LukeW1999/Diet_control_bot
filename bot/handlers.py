@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -13,6 +14,9 @@ from utils.image import save_and_encode
 from .keyboards import main_menu
 
 logger = logging.getLogger(__name__)
+
+# Album (multi-photo) state: media_group_id -> {images, update, wait_msg}
+_pending_albums: dict = {}
 
 
 def _allowed(update: Update) -> bool:
@@ -209,38 +213,93 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     logger.info(f"Chat ID: {update.effective_chat.id}")
 
-    wait_msg = await update.message.reply_text("正在分析图片，请稍等...")
+    import base64
+    photo = update.message.photo[-1]
+    file = await ctx.bot.get_file(photo.file_id)
+    image_bytes = bytes(await file.download_as_bytearray())
+    b64 = base64.b64encode(image_bytes).decode()
+
+    media_group_id = update.message.media_group_id
+
+    if media_group_id:
+        # Album: collect all photos then process together
+        if media_group_id not in _pending_albums:
+            wait_msg = await update.message.reply_text("正在收集图片...")
+            _pending_albums[media_group_id] = {
+                "images": [b64],
+                "update": update,
+                "ctx": ctx,
+                "wait_msg": wait_msg,
+            }
+            asyncio.create_task(_process_album_delayed(media_group_id))
+        else:
+            _pending_albums[media_group_id]["images"].append(b64)
+    else:
+        wait_msg = await update.message.reply_text("正在分析图片，请稍等...")
+        await _process_single_photo(b64, image_bytes, update, ctx, wait_msg)
+
+
+async def _process_album_delayed(media_group_id: str) -> None:
+    await asyncio.sleep(3.0)  # wait for all photos in album to arrive
+    entry = _pending_albums.pop(media_group_id, None)
+    if not entry:
+        return
+
+    images = entry["images"]
+    update = entry["update"]
+    wait_msg = entry["wait_msg"]
+    today_str = str(date.today())
 
     try:
-        photo = update.message.photo[-1]
-        file = await ctx.bot.get_file(photo.file_id)
-        image_bytes = await file.download_as_bytearray()
+        await wait_msg.edit_text(f"正在分析 {len(images)} 张图片，请稍等...")
 
-        # Classify first with a temp encode
-        import base64
-        temp_b64 = base64.b64encode(bytes(image_bytes)).decode()
-        image_type = await parsers.classify_image(temp_b64)
+        # Classify by first image
+        image_type = await parsers.classify_image(images[0])
 
+        if image_type == "body":
+            merged: dict = {}
+            for b64 in images:
+                data, _ = await parsers.parse_body_composition_image(b64)
+                for k, v in data.items():
+                    if v is not None and merged.get(k) is None:
+                        merged[k] = v
+            merged["date"] = today_str
+            prev = crud.get_latest_body_composition()
+            rec = crud.upsert_body_composition(merged, "album", str(merged))
+            reply = _format_body_reply(rec, prev)
+        else:
+            reply = f"相册目前仅支持身体成分报告（识别为 {image_type}）。"
+
+        await wait_msg.edit_text(reply, parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Album processing error")
+        await wait_msg.edit_text(f"解析失败：{e}\n\n请重新发图或手动输入数据。")
+
+
+async def _process_single_photo(b64: str, image_bytes: bytes, update: Update,
+                                 ctx: ContextTypes.DEFAULT_TYPE, wait_msg) -> None:
+    try:
+        image_type = await parsers.classify_image(b64)
         today_str = str(date.today())
 
         if image_type == "diet":
-            filepath, b64 = save_and_encode(bytes(image_bytes), "diet")
-            data, raw = await parsers.parse_diet_image(b64)
-            data["date"] = today_str  # always use send date
+            filepath, enc = save_and_encode(image_bytes, "diet")
+            data, raw = await parsers.parse_diet_image(enc)
+            data["date"] = today_str
             rec = crud.upsert_diet_record(data, filepath, raw)
             reply = _format_diet_reply(data, rec)
 
         elif image_type == "body":
-            filepath, b64 = save_and_encode(bytes(image_bytes), "body")
-            data, raw = await parsers.parse_body_composition_image(b64)
-            data["date"] = today_str  # always use send date
+            filepath, enc = save_and_encode(image_bytes, "body")
+            data, raw = await parsers.parse_body_composition_image(enc)
+            data["date"] = today_str
             prev = crud.get_latest_body_composition()
             rec = crud.upsert_body_composition(data, filepath, raw)
             reply = _format_body_reply(rec, prev)
 
         elif image_type == "weight_history":
-            filepath, b64 = save_and_encode(bytes(image_bytes), "body")
-            records, raw = await parsers.parse_weight_history_image(b64)
+            filepath, enc = save_and_encode(image_bytes, "body")
+            records, raw = await parsers.parse_weight_history_image(enc)
             saved = 0
             for r in records:
                 if r.get("weight_kg"):
