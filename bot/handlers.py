@@ -96,6 +96,72 @@ async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pure-Python weight stats — no LLM, guaranteed accurate numbers."""
+    if not _allowed(update):
+        return
+
+    today = date.today()
+    records = crud.get_body_compositions_range(today - timedelta(days=730), today)
+    records = [r for r in records if r.weight_kg is not None]
+
+    if not records:
+        await update.message.reply_text("暂无体重数据。")
+        return
+
+    bmr = crud.get_bmr()
+    goal = float(os.getenv("USER_WEIGHT_GOAL", 75.0))
+    latest = records[-1]
+    lines = [f"📊 体重统计（纯Python计算）\n"]
+
+    # Current
+    lines.append(f"⚖️ 最新体重：{latest.weight_kg} kg（{latest.date}）")
+    lines.append(f"🎯 目标：{goal} kg　距离：{latest.weight_kg - goal:.1f} kg\n")
+
+    # Peak
+    peak = max(records, key=lambda r: r.weight_kg)
+    peak_loss = peak.weight_kg - latest.weight_kg
+    peak_days = (latest.date - peak.date).days
+    if peak_days > 0:
+        lines.append(f"📉 距峰值（{peak.weight_kg}kg，{peak.date}）")
+        lines.append(f"   已减 {peak_loss:.2f} kg / {peak_days} 天（{peak_days/7:.1f} 周）")
+        lines.append(f"   均速 {peak_loss/peak_days*7:.2f} kg/周\n")
+
+    # Recent segments
+    checkpoints = [7, 14, 30]
+    for days_ago in checkpoints:
+        cutoff = today - timedelta(days=days_ago)
+        past = [r for r in records if r.date <= cutoff]
+        if not past:
+            continue
+        ref = past[-1]
+        diff = latest.weight_kg - ref.weight_kg
+        actual_days = (latest.date - ref.date).days
+        if actual_days == 0:
+            continue
+        arrow = "▼" if diff < 0 else "▲"
+        lines.append(
+            f"过去 ~{days_ago}天（{ref.date}）：{arrow} {abs(diff):.2f} kg"
+            f"（{actual_days}天，{diff/actual_days*7:.2f} kg/周）"
+        )
+
+    # BMR & deficit
+    lines.append(f"\n🔥 BMR：{bmr:.0f} kcal")
+    summaries = crud.get_daily_summaries_range(today - timedelta(days=6), today)
+    if summaries:
+        avg_deficit = sum(s.calorie_deficit or 0 for s in summaries) / len(summaries)
+        lines.append(f"📉 近7天均缺口：{avg_deficit:.0f} kcal/天")
+        projected = avg_deficit * 30 / 7700
+        lines.append(f"📊 按此速度月减脂：{projected:.2f} kg")
+
+    # Target pace
+    safe_low = latest.weight_kg * 0.005
+    safe_high = latest.weight_kg * 0.01
+    lines.append(f"\n✅ 安全减速：{safe_low:.2f}–{safe_high:.2f} kg/周")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
