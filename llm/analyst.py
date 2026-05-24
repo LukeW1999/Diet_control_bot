@@ -1,5 +1,4 @@
 import os
-import re
 from datetime import date, timedelta
 from .client import text_call
 from utils.food_log import search, get_recent, get_by_date, get_high_calorie_days
@@ -25,7 +24,7 @@ async def generate_weekly_report(user_data: dict) -> str:
 
 
 async def answer_question(question: str, context: dict) -> str:
-    food_context = _grep_food_log(question)
+    food_context = await _grep_skill(question)
     context_str = _format_context(context)
     full_context = context_str
     if food_context:
@@ -33,57 +32,57 @@ async def answer_question(question: str, context: dict) -> str:
     return await text_call(_QA_SYSTEM, f"用户数据：\n{full_context}\n\n用户问题：{question}")
 
 
-def _grep_food_log(question: str) -> str:
-    """Search food log based on question intent."""
-    q = question.lower()
+_GREP_SKILL_PROMPT = f"""今天是 {date.today()}。你是一个食物日志搜索助手。
 
-    # Date-based queries
-    if "昨天" in q:
-        yesterday = date.today() - timedelta(days=1)
-        entry = get_by_date(yesterday)
-        return entry or "昨天无记录"
+食物日志每天一条，格式：
+[YYYY-MM-DD] 总摄入:Xkcal 蛋白质:Xg 碳水:Xg 脂肪:Xg
+  早餐(Xkcal): 食物1数量, 食物2数量...
+  午餐/晚餐/运动...
 
-    if "今天" in q:
-        entry = get_by_date(date.today())
-        return entry or "今天还没有饮食记录"
+根据用户问题，决定如何搜索日志。只返回以下之一，不要返回其他内容：
 
-    if "最近" in q or "这周" in q or "本周" in q:
-        entries = get_recent(7)
-        return "\n\n".join(entries) if entries else "最近7天无记录"
+- 如果问某一天（今天/昨天/前天/具体日期）→ 返回 DATE:YYYY-MM-DD
+- 如果问最近/本周/这几天 → 返回 RECENT:7
+- 如果问上周/最近两周 → 返回 RECENT:14
+- 如果问放纵餐/高热量/超标/作弊 → 返回 HIGH_CALORIE:2200
+- 如果问某种食物（频率/次数/有没有吃过）→ 返回 SEARCH:食物名
+- 如果问题与饮食历史无关 → 返回 NONE"""
 
-    if "上周" in q:
-        entries = get_recent(14)
-        return "\n\n".join(entries[-14:]) if entries else "无记录"
 
-    # Cheat meal / high calorie
-    if any(k in q for k in ("放纵", "作弊", "多吃", "高热量", "超标")):
-        entries = get_high_calorie_days(2200)
+async def _grep_skill(question: str) -> str:
+    """Ask Qwen what to grep, then execute the search."""
+    instruction = await text_call(_GREP_SKILL_PROMPT, question)
+    instruction = instruction.strip()
+
+    if instruction.startswith("DATE:"):
+        d = instruction[5:].strip()
+        try:
+            from datetime import date as date_cls
+            entry = get_by_date(date_cls.fromisoformat(d))
+            return entry or f"{d} 无记录"
+        except ValueError:
+            return ""
+
+    if instruction.startswith("RECENT:"):
+        days = int(instruction[7:].strip())
+        entries = get_recent(days)
+        return "\n\n".join(entries) if entries else f"最近{days}天无记录"
+
+    if instruction.startswith("HIGH_CALORIE:"):
+        threshold = int(instruction[13:].strip())
+        entries = get_high_calorie_days(threshold)
         if not entries:
-            return "没有找到明显的高热量天（>2200kcal）"
-        return f"高热量天（>2200kcal），共{len(entries)}次：\n\n" + "\n\n".join(entries[-10:])
+            return f"没有找到高热量天（>{threshold}kcal）"
+        return f"高热量天共{len(entries)}次：\n\n" + "\n\n".join(entries[-10:])
 
-    # Frequency query for specific food
-    freq_match = re.search(r"多久.{0,4}(吃|喝|来).{0,4}[次回]?(.+?)(?:[？?]|$)", question)
-    if freq_match:
-        food = freq_match.group(2).strip()
-        entries = search(food)
+    if instruction.startswith("SEARCH:"):
+        keyword = instruction[7:].strip()
+        entries = search(keyword)
         if not entries:
-            return f"日志里没有找到"{food}"的记录"
-        return f'找到 {len(entries)} 次包含"{food}"的记录：\n\n' + "\n\n".join(entries)
+            return f"日志里没有找到"{keyword}"的记录"
+        return f'包含"{keyword}"的记录共{len(entries)}次：\n\n' + "\n\n".join(entries)
 
-    # General food keyword search
-    food_keywords = ["吃", "喝", "食物", "早餐", "午餐", "晚餐", "蛋白粉", "鸡胸", "牛肉"]
-    for kw in food_keywords:
-        if kw in q and len(q) > 4:
-            # Extract the actual food name (everything after 吃/喝)
-            idx = q.find(kw)
-            food = question[idx + 1:idx + 8].strip("？? 的了过")
-            if len(food) >= 2:
-                entries = search(food)
-                if entries:
-                    return f'包含"{food}"的记录：\n\n' + "\n\n".join(entries[-5:])
-
-    # Default: return recent 3 days as context
+    # NONE or unrecognized
     entries = get_recent(3)
     return "\n\n".join(entries) if entries else ""
 
