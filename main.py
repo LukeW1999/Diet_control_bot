@@ -10,7 +10,6 @@ from bot.handlers import (
     cmd_profile, cmd_update, cmd_stats,
     handle_photo, handle_text, handle_callback,
 )
-from bot.scheduler import start_scheduler
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -41,16 +40,6 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Start scheduler only if chat_id is configured
-    if chat_id and chat_id != "YOUR_CHAT_ID_HERE":
-        bot = app.bot
-        # Schedule after event loop starts
-        async def post_init(app):
-            start_scheduler(bot, chat_id)
-
-        app.post_init = post_init
-    else:
-        logger.warning("ALLOWED_CHAT_ID not set — scheduler disabled. Send /start to get your Chat ID.")
 
     logger.info("Bot starting...")
     app.run_polling(drop_pending_updates=True)

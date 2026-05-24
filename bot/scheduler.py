@@ -1,74 +1,12 @@
 import logging
 import os
 from datetime import date, timedelta
-from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
 
 from db import crud
 
 logger = logging.getLogger(__name__)
-
-UK_TZ = ZoneInfo("Europe/London")
-
-
-def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone=UK_TZ)
-
-    morning_time = os.getenv("MORNING_CHECK_TIME", "08:00").split(":")
-    weekly_day = os.getenv("WEEKLY_REPORT_DAY", "monday")
-
-    scheduler.add_job(
-        _morning_check,
-        "cron",
-        hour=int(morning_time[0]),
-        minute=int(morning_time[1]),
-        timezone=UK_TZ,
-        kwargs={"bot": bot, "chat_id": chat_id},
-    )
-
-    scheduler.add_job(
-        _evening_summary,
-        "cron",
-        hour=21,
-        minute=30,
-        timezone=UK_TZ,
-        kwargs={"bot": bot, "chat_id": chat_id},
-    )
-
-    scheduler.add_job(
-        _notes_reminder,
-        "cron",
-        hour=16,
-        minute=0,
-        timezone=UK_TZ,
-        kwargs={"bot": bot, "chat_id": chat_id},
-    )
-
-    scheduler.add_job(
-        _weekly_report,
-        "cron",
-        day_of_week=weekly_day,
-        hour=9,
-        minute=0,
-        timezone=UK_TZ,
-        kwargs={"bot": bot, "chat_id": chat_id},
-    )
-
-    scheduler.add_job(
-        _weekly_notes_summary,
-        "cron",
-        day_of_week="sunday",
-        hour=20,
-        minute=0,
-        timezone=UK_TZ,
-        kwargs={"bot": bot, "chat_id": chat_id},
-    )
-
-    scheduler.start()
-    logger.info("Scheduler started (timezone: Europe/London)")
-    return scheduler
 
 
 async def _morning_check(bot: Bot, chat_id: str) -> None:
