@@ -19,7 +19,7 @@
 | 📔 Mood & diary recording | 支持心情日记记录 |
 | 📅 Weekly health report + notes summary | 每周自动生成健康周报和笔记整理 |
 | 💬 Natural language queries | 自然语言查询饮食历史、体重趋势 |
-| ✏️ Conversational data correction | 对话纠错（"内脏脂肪应该是13"） |
+| ✏️ Conversational data correction | 对话纠错（"体重应该是xx KG"） |
 
 ---
 
