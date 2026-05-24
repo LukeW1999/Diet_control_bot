@@ -4,6 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
 from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary
+from utils.food_log import write_entry as write_food_log
 
 
 _engine = None
@@ -55,6 +56,7 @@ def upsert_diet_record(data: dict, image_path: str, raw_response: str) -> DietRe
         session.refresh(rec)
         _update_daily_summary_from_diet(session, rec)
         session.commit()
+        write_food_log(rec)
         return rec
 
 

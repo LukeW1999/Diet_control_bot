@@ -1,5 +1,8 @@
 import os
+import re
+from datetime import date, timedelta
 from .client import text_call
+from utils.food_log import search, get_recent, get_by_date, get_high_calorie_days
 
 _WEEKLY_SYSTEM = """你是用户的减脂健康顾问。用户正在进行减脂计划，目标是从 91.8kg 减到 74.8kg，
 同时保留肌肉。用户的基础代谢是 1916 kcal，蛋白质目标是体重×1.8g/kg。
@@ -22,8 +25,67 @@ async def generate_weekly_report(user_data: dict) -> str:
 
 
 async def answer_question(question: str, context: dict) -> str:
+    food_context = _grep_food_log(question)
     context_str = _format_context(context)
-    return await text_call(_QA_SYSTEM, f"用户数据：\n{context_str}\n\n用户问题：{question}")
+    full_context = context_str
+    if food_context:
+        full_context += f"\n\n饮食历史记录：\n{food_context}"
+    return await text_call(_QA_SYSTEM, f"用户数据：\n{full_context}\n\n用户问题：{question}")
+
+
+def _grep_food_log(question: str) -> str:
+    """Search food log based on question intent."""
+    q = question.lower()
+
+    # Date-based queries
+    if "昨天" in q:
+        yesterday = date.today() - timedelta(days=1)
+        entry = get_by_date(yesterday)
+        return entry or "昨天无记录"
+
+    if "今天" in q:
+        entry = get_by_date(date.today())
+        return entry or "今天还没有饮食记录"
+
+    if "最近" in q or "这周" in q or "本周" in q:
+        entries = get_recent(7)
+        return "\n\n".join(entries) if entries else "最近7天无记录"
+
+    if "上周" in q:
+        entries = get_recent(14)
+        return "\n\n".join(entries[-14:]) if entries else "无记录"
+
+    # Cheat meal / high calorie
+    if any(k in q for k in ("放纵", "作弊", "多吃", "高热量", "超标")):
+        entries = get_high_calorie_days(2200)
+        if not entries:
+            return "没有找到明显的高热量天（>2200kcal）"
+        return f"高热量天（>2200kcal），共{len(entries)}次：\n\n" + "\n\n".join(entries[-10:])
+
+    # Frequency query for specific food
+    freq_match = re.search(r"多久.{0,4}(吃|喝|来).{0,4}[次回]?(.+?)(?:[？?]|$)", question)
+    if freq_match:
+        food = freq_match.group(2).strip()
+        entries = search(food)
+        if not entries:
+            return f"日志里没有找到"{food}"的记录"
+        return f'找到 {len(entries)} 次包含"{food}"的记录：\n\n' + "\n\n".join(entries)
+
+    # General food keyword search
+    food_keywords = ["吃", "喝", "食物", "早餐", "午餐", "晚餐", "蛋白粉", "鸡胸", "牛肉"]
+    for kw in food_keywords:
+        if kw in q and len(q) > 4:
+            # Extract the actual food name (everything after 吃/喝)
+            idx = q.find(kw)
+            food = question[idx + 1:idx + 8].strip("？? 的了过")
+            if len(food) >= 2:
+                entries = search(food)
+                if entries:
+                    return f'包含"{food}"的记录：\n\n' + "\n\n".join(entries[-5:])
+
+    # Default: return recent 3 days as context
+    entries = get_recent(3)
+    return "\n\n".join(entries) if entries else ""
 
 
 def _format_weekly_data(data: dict) -> str:
