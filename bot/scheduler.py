@@ -78,7 +78,7 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
     body = crud.get_latest_body_composition()
     bmr = crud.get_bmr()
 
-    lines = ["早上好！☀️\n"]
+    lines = ["早上好。新的一天，新的机会。☀️\n"]
 
     # Weather
     try:
@@ -98,16 +98,16 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
             f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）\n",
         ]
     else:
-        lines.append("昨天没有饮食记录，已从统计中排除。\n")
+        lines.append("昨天没有饮食记录。没有数据就没有进步——今天记录好。\n")
 
     weight = body.weight_kg if body else 90
     protein_goal = float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8)) * weight
 
     lines += [
-        "今天目标：",
-        f"• 蛋白质 ≥ {protein_goal:.0f}g",
+        "今天的任务：",
+        f"• 蛋白质 ≥ {protein_goal:.0f}g，不达标就是欠债",
         f"• 热量控制在 {bmr - 500:.0f}–{bmr - 300:.0f} kcal",
-        "\n今天心情怎么样？随手记点什么都行 📔",
+        "\n今天状态怎么样？有什么想说的也可以发给我 📔",
     ]
 
     await bot.send_message(chat_id=chat_id, text="\n".join(lines))
@@ -157,7 +157,7 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
     protein_icon = "✅ 超额完成！" if protein_pct >= 100 else ("👍 接近目标" if protein_pct >= 85 else "")
 
     lines = [
-        "今日收工 🌙\n",
+        "今天收工，来对账。🌙\n",
         "📊 今日数据",
         f"🔥 热量：{diet.total_calories:.0f} kcal（缺口 {today_deficit:.0f} kcal）",
         f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）{protein_icon}",

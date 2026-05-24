@@ -350,7 +350,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             mood_score=diary.get("mood_score"),
         )
         mood_str = f"心情：{rec.mood}（{rec.mood_score}/5）" if rec.mood else ""
-        await update.message.reply_text(f"📔 日记已记录 {rec.date}\n{mood_str}")
+        response = await analyst.generate_diary_response(diary.get("content", text), diary.get("mood", ""))
+        await update.message.reply_text(f"📔 {rec.date} {mood_str}\n\n{response}")
         return
 
     # Correction intent: "内脏脂肪应该是13" / "体脂率错了，是29.2"
