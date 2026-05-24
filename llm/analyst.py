@@ -207,11 +207,50 @@ _PSYCHOLOGIST_QA_SYSTEM = """你是用户信任的心理顾问，温柔、细腻
 - 不要为了"显得专业"而拉长回复"""
 
 
+_BOOK_GREP_SYSTEM = """用户在聊书籍或某段内容。判断是否需要在《查拉图斯特拉如是说》全文中搜索。
+
+如果需要搜索，只返回一个最关键的中文搜索词（2-6个字，越精准越好）。
+如果不需要（比如只是泛泛聊感受），返回 NONE。
+
+只返回搜索词或 NONE，不要其他内容。"""
+
+
+async def _book_grep_skill(question: str) -> str:
+    """Two-pass book search: ask Qwen for keyword, grep, optionally refine."""
+    from utils.book_search import grep_book
+
+    # Pass 1: get keyword
+    keyword = await text_call(_BOOK_GREP_SYSTEM, question)
+    keyword = keyword.strip()
+    if keyword.upper() == "NONE" or not keyword:
+        return ""
+
+    passages = grep_book(keyword)
+    if not passages:
+        return ""
+
+    # Pass 2: if passages mention a chapter title, try to grep that too
+    import re
+    chapter_match = re.search(r"[「《【]([^」》】]{2,10})[」》】]", passages)
+    if chapter_match:
+        chapter_kw = chapter_match.group(1)
+        if chapter_kw != keyword:
+            extra = grep_book(chapter_kw, context_chars=150)
+            if extra and extra not in passages:
+                passages += f"\n\n---\n\n{extra}"
+
+    return passages
+
+
 async def answer_as_psychologist(question: str, memory: str = "", history: list | None = None) -> str:
     """Answer a non-diary conversational message as the psychologist."""
+    book_context = await _book_grep_skill(question)
+
     parts = []
     if memory:
         parts.append(f"用户背景：{memory}")
+    if book_context:
+        parts.append(f"以下是从原书检索到的相关段落，供参考：\n{book_context}")
     parts.append(f"用户说：{question}")
     return await text_call(_PSYCHOLOGIST_QA_SYSTEM, "\n".join(parts), history=history)
 

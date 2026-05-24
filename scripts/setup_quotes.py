@@ -20,6 +20,9 @@ EPUB_URL = (
 OUTPUT_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "zarathustra_quotes.txt"
 )
+FULL_TEXT_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "zarathustra_full.txt"
+)
 
 # Minimum / maximum char length for a quote candidate
 MIN_LEN = 15
@@ -94,8 +97,14 @@ def main() -> None:
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         for q in quotes:
             f.write(q + "\n")
+    print(f"Saved quotes to {OUTPUT_PATH}")
 
-    print(f"Saved to {OUTPUT_PATH}")
+    # Save cleaned full text for grep-based search
+    # Collapse excessive blank lines to keep file compact
+    clean = re.sub(r"\n{3,}", "\n\n", full_text)
+    with open(FULL_TEXT_PATH, "w", encoding="utf-8") as f:
+        f.write(clean)
+    print(f"Saved full text to {FULL_TEXT_PATH} ({len(clean):,} chars)")
 
 
 if __name__ == "__main__":
