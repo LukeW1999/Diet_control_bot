@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 async def _morning_check(bot: Bot, chat_id: str) -> None:
     from utils.weather import get_london_weather, format_weather
     from utils.quotes import get_random_quote
+    from utils.hitokoto import fetch_hitokoto
     from llm.analyst import generate_morning_quote_commentary
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
@@ -63,6 +64,12 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
             ]
         except Exception:
             lines += ["\n📖 今日金句", f"「{quote}」", f"——{source}"]
+
+    # Hitokoto random quote
+    hitokoto = await fetch_hitokoto()
+    if hitokoto:
+        ht_text, ht_source = hitokoto
+        lines += ["\n💬 每日一言", f"「{ht_text}」", f"——{ht_source}"]
 
     lines.append("\n今天状态怎么样？有什么想说的也可以发给我 📔")
 
