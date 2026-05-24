@@ -3,6 +3,58 @@ from datetime import date, timedelta
 from .client import text_call
 from utils.food_log import search, get_recent, get_by_date, get_high_calorie_days
 
+_CORRECT_SYSTEM = """你是一个数据纠错助手。用户想修正他的健康记录中某个字段的值。
+
+已知字段映射（中文 → 数据库字段名）：
+体重 → weight_kg
+体脂率 → body_fat_pct
+骨骼肌量 → skeletal_muscle_kg
+内脏脂肪 → visceral_fat_level
+基础代谢 → bmr_kcal
+BMI → bmi
+健康评分 → health_score
+体年龄 → body_age
+脂肪量 → body_fat_kg
+皮下脂肪 → subcutaneous_fat_kg
+去脂体重 → fat_free_mass_kg
+蛋白质摄入 → protein_g
+碳水 → carbs_g
+脂肪摄入 → fat_g
+总热量 → total_calories
+
+根据用户的话，返回JSON，不要返回其他内容：
+{
+  "table": "body 或 diet",
+  "field": "数据库字段名",
+  "value": 数字,
+  "date": "YYYY-MM-DD 或 today"
+}
+
+如果无法识别意图，返回 {"error": "无法识别"}"""
+
+
+async def detect_correction(text: str) -> dict | None:
+    """Return correction intent {table, field, value, date} or None."""
+    correction_hints = ["错了", "应该是", "不是", "纠正", "修改", "改成", "改为", "应该"]
+    if not any(h in text for h in correction_hints):
+        return None
+    today_str = date.today().isoformat()
+    raw = await text_call(
+        _CORRECT_SYSTEM,
+        f"今天是{today_str}。用户说：{text}"
+    )
+    try:
+        import json, re
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group()) if m else {}
+        if "error" in data or "field" not in data:
+            return None
+        if data.get("date") == "today":
+            data["date"] = today_str
+        return data
+    except Exception:
+        return None
+
 _WEEKLY_SYSTEM = """你是用户的减脂健康顾问。用户正在进行减脂计划，目标是从 91.8kg 减到 74.8kg，
 同时保留肌肉。用户的基础代谢是 1916 kcal，蛋白质目标是体重×1.8g/kg。
 

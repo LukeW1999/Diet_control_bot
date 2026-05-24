@@ -189,6 +189,30 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     text = update.message.text.strip()
 
+    # Correction intent: "内脏脂肪应该是13" / "体脂率错了，是29.2"
+    correction = await analyst.detect_correction(text)
+    if correction:
+        from db.crud import apply_correction
+        from datetime import date as date_cls
+        record_date = date_cls.fromisoformat(correction["date"])
+        ok = apply_correction(correction["table"], correction["field"], correction["value"], record_date)
+        if ok:
+            field_cn = {
+                "visceral_fat_level": "内脏脂肪",
+                "body_fat_pct": "体脂率",
+                "weight_kg": "体重",
+                "skeletal_muscle_kg": "骨骼肌量",
+                "bmr_kcal": "基础代谢",
+                "total_calories": "总热量",
+                "protein_g": "蛋白质",
+            }.get(correction["field"], correction["field"])
+            await update.message.reply_text(
+                f"✅ 已修正 {record_date} 的{field_cn}：{correction['value']}"
+            )
+        else:
+            await update.message.reply_text("找不到对应记录，无法修正。")
+        return
+
     # Quick weight entry: "今天体重 91.2" or "体重 91.2"
     weight_match = re.search(r"体重\s*([\d.]+)", text)
     if weight_match:

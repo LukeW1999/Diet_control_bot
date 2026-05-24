@@ -197,6 +197,27 @@ def quick_weight_entry(target_date: date, weight_kg: float) -> None:
         session.commit()
 
 
+def apply_correction(table: str, field: str, value, record_date: date) -> bool:
+    """Apply a user correction to body or diet record. Returns True if successful."""
+    with _session() as session:
+        if table == "body":
+            rec = session.scalar(select(BodyComposition).where(BodyComposition.date == record_date))
+            if not rec:
+                rec = BodyComposition(date=record_date)
+                session.add(rec)
+            if hasattr(rec, field):
+                setattr(rec, field, value)
+                session.commit()
+                return True
+        elif table == "diet":
+            rec = session.scalar(select(DietRecord).where(DietRecord.date == record_date))
+            if rec and hasattr(rec, field):
+                setattr(rec, field, value)
+                session.commit()
+                return True
+    return False
+
+
 def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
     bmr = float(os.getenv("USER_BMR", 1916))
     protein_goal_per_kg = float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8))
