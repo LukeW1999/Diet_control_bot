@@ -460,6 +460,7 @@ def _build_context() -> dict:
         sum(s.calorie_deficit or 0 for s in summaries) / len(summaries)
         if summaries else None
     )
+    body_history = crud.get_body_compositions_range(today - timedelta(days=90), today)
 
     ctx = {}
     if body:
@@ -469,6 +470,16 @@ def _build_context() -> dict:
             "body_fat_pct": body.body_fat_pct,
             "muscle_mass_kg": body.muscle_mass_kg,
         }
+    if body_history:
+        ctx["body_history"] = [
+            {
+                "date": str(r.date),
+                "weight_kg": r.weight_kg,
+                "body_fat_pct": r.body_fat_pct,
+                "skeletal_muscle_kg": r.skeletal_muscle_kg,
+            }
+            for r in body_history
+        ]
     if today_diet:
         ctx["today_diet"] = {
             "total_calories": today_diet.total_calories,

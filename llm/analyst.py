@@ -259,6 +259,19 @@ def _format_context(ctx: dict) -> str:
             f"最新体重：{b.get('weight_kg')}kg，体脂率：{b.get('body_fat_pct')}%，"
             f"肌肉量：{b.get('muscle_mass_kg')}kg（{b.get('date')}）"
         )
+    if ctx.get("body_history"):
+        history = ctx["body_history"]
+        if len(history) >= 2:
+            lines.append("\n近期体重/体成分记录：")
+            for r in history:
+                parts = []
+                if r.get("weight_kg"):
+                    parts.append(f"体重{r['weight_kg']}kg")
+                if r.get("body_fat_pct"):
+                    parts.append(f"体脂{r['body_fat_pct']}%")
+                if r.get("skeletal_muscle_kg"):
+                    parts.append(f"骨骼肌{r['skeletal_muscle_kg']}kg")
+                lines.append(f"  {r['date']}: {', '.join(parts)}")
     if ctx.get("today_diet"):
         d = ctx["today_diet"]
         lines.append(
