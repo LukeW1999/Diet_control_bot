@@ -410,7 +410,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     note = await analyst.classify_note(text)
     if note:
         from utils.notes import save_note, CATEGORY_ICONS
-        save_note(date.today(), note.get("category", "other"), note.get("content", text))
+        save_note(date.today(), note.get("category", "other"), text)
         label = CATEGORY_ICONS.get(note.get("category", "other"), "📝 其他")
         summary = note.get("summary", "")
         await update.message.reply_text(f"📌 已记录到「{label}」\n{summary}")
