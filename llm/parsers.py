@@ -1,8 +1,24 @@
+import base64
+import io
 from datetime import date as _date
+from PIL import Image
 from .client import vision_call, text_call, extract_json
+
 
 def _today() -> str:
     return _date.today().isoformat()
+
+
+def _rotate_b64(image_b64: str, degrees: int = 90) -> str:
+    """Rotate a base64-encoded image and return the rotated base64 string."""
+    img_bytes = base64.b64decode(image_b64)
+    img = Image.open(io.BytesIO(img_bytes))
+    rotated = img.rotate(degrees, expand=True)
+    if rotated.mode in ("RGBA", "P"):
+        rotated = rotated.convert("RGB")
+    buf = io.BytesIO()
+    rotated.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode()
 
 _CLASSIFY_PROMPT = """你是一个图片类型分类助手。请判断这张截图属于哪一类：
 1. diet - 薄荷健康饮食记录（包含食物列表和热量）
@@ -219,8 +235,10 @@ async def parse_body_composition_image(image_b64: str) -> tuple[dict, str]:
 
 
 async def parse_weight_history_image(image_b64: str) -> tuple[list, str]:
+    # Rotate 90° clockwise so the chart reads left-to-right for Qwen
+    rotated_b64 = _rotate_b64(image_b64, degrees=-90)
     prompt = _WEIGHT_HISTORY_SYSTEM.format(today=_today())
-    raw = await vision_call(prompt, "请提取所有体重记录数据。", image_b64)
+    raw = await vision_call(prompt, "请提取所有体重记录数据。", rotated_b64)
     data = extract_json(raw)
     return data, raw
 
