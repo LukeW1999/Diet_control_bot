@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
@@ -9,12 +10,13 @@ from db import crud
 
 logger = logging.getLogger(__name__)
 
+UK_TZ = ZoneInfo("Europe/London")
+
 
 def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(timezone=UK_TZ)
 
     morning_time = os.getenv("MORNING_CHECK_TIME", "08:00").split(":")
-    evening_time = os.getenv("EVENING_SUMMARY_TIME", "21:00").split(":")
     weekly_day = os.getenv("WEEKLY_REPORT_DAY", "monday")
 
     scheduler.add_job(
@@ -22,14 +24,16 @@ def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
         "cron",
         hour=int(morning_time[0]),
         minute=int(morning_time[1]),
+        timezone=UK_TZ,
         kwargs={"bot": bot, "chat_id": chat_id},
     )
 
     scheduler.add_job(
         _evening_summary,
         "cron",
-        hour=int(evening_time[0]),
-        minute=int(evening_time[1]),
+        hour=21,
+        minute=30,
+        timezone=UK_TZ,
         kwargs={"bot": bot, "chat_id": chat_id},
     )
 
@@ -39,11 +43,12 @@ def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
         day_of_week=weekly_day,
         hour=9,
         minute=0,
+        timezone=UK_TZ,
         kwargs={"bot": bot, "chat_id": chat_id},
     )
 
     scheduler.start()
-    logger.info("Scheduler started")
+    logger.info("Scheduler started (timezone: Europe/London)")
     return scheduler
 
 
@@ -51,7 +56,6 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
     body = crud.get_latest_body_composition()
-
     bmr = float(os.getenv("USER_BMR", 1916))
 
     lines = ["早上好！☀️\n"]
@@ -66,9 +70,8 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
             f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）\n",
         ]
     else:
-        lines.append("昨天没有饮食记录。\n")
+        lines.append("昨天没有饮食记录，已从统计中排除。\n")
 
-    # Protein goal based on body weight
     weight = body.weight_kg if body else 90
     protein_goal = float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8)) * weight
 
@@ -87,32 +90,58 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
     diet = crud.get_diet_record(today)
     bmr = float(os.getenv("USER_BMR", 1916))
 
-    if not diet:
-        await bot.send_message(
-            chat_id=chat_id,
-            text="今天还没有饮食记录 📸\n\n记得把今天的薄荷截图发给我，或者直接发数字告诉我吃了什么。",
+    # ── 过去30天（只统计有记录的天）──────────────────────────
+    month_start = today - timedelta(days=29)
+    month_records = crud.get_diet_records_range(month_start, today)
+    tracked_days = len(month_records)
+
+    if tracked_days > 0:
+        month_deficit = sum(
+            bmr - (r.total_calories or 0) + (r.exercise_calories or 0)
+            for r in month_records
         )
+        avg_daily_deficit = month_deficit / tracked_days
+        monthly_projected_deficit = avg_daily_deficit * 30
+        monthly_fat_loss = monthly_projected_deficit / 7700
+    else:
+        avg_daily_deficit = 0
+        monthly_fat_loss = 0
+
+    # ── 今天没有记录 ──────────────────────────────────────────
+    if not diet:
+        lines = [
+            "📸 今天还没有饮食记录\n",
+            "今天数据缺失，不计入统计。\n",
+        ]
+        if tracked_days > 0:
+            lines += [
+                f"📅 过去30天已记录 {tracked_days} 天",
+                f"📉 日均热量缺口：{avg_daily_deficit:.0f} kcal",
+                f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
+            ]
+        await bot.send_message(chat_id=chat_id, text="\n".join(lines))
         return
 
+    # ── 今天有记录 ────────────────────────────────────────────
     net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
-    deficit = bmr - net
+    today_deficit = bmr - net
     protein_pct = int(diet.protein_g / diet.protein_goal_g * 100) if diet.protein_goal_g else 0
-    protein_icon = "✓ 接近目标！" if protein_pct >= 85 else ("✅ 超额完成！" if protein_pct >= 100 else "")
-
-    # Week cumulative deficit
-    start = today - timedelta(days=6)
-    summaries = crud.get_daily_summaries_range(start, today)
-    week_deficit = sum(s.calorie_deficit or 0 for s in summaries)
-    fat_burned = week_deficit / 7700
+    protein_icon = "✅ 超额完成！" if protein_pct >= 100 else ("👍 接近目标" if protein_pct >= 85 else "")
 
     lines = [
         "今日收工 🌙\n",
         "📊 今日数据",
-        f"热量：{diet.total_calories:.0f} kcal（缺口 {deficit:.0f} kcal）",
-        f"蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）{protein_icon}",
-        f"碳水：{diet.carbs_g:.0f}g | 脂肪：{diet.fat_g:.0f}g\n",
-        f"本周累计缺口：{week_deficit:.0f} kcal（约消耗 {fat_burned:.2f}kg 脂肪）",
+        f"🔥 热量：{diet.total_calories:.0f} kcal（缺口 {today_deficit:.0f} kcal）",
+        f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）{protein_icon}",
+        f"🍚 碳水：{diet.carbs_g:.0f}g | 🧈 脂肪：{diet.fat_g:.0f}g",
     ]
+
+    if tracked_days > 0:
+        lines += [
+            f"\n📅 过去30天已记录 {tracked_days} 天（遗漏天不计入）",
+            f"📉 日均热量缺口：{avg_daily_deficit:.0f} kcal",
+            f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
+        ]
 
     await bot.send_message(chat_id=chat_id, text="\n".join(lines))
 
