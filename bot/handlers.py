@@ -484,18 +484,46 @@ def _format_body_reply(rec, prev) -> str:
         "✅ 身体成分已记录\n",
         f"📅 {rec.date}",
         f"⚖️ 体重：{rec.weight_kg} kg（变化：{delta(rec.weight_kg, prev_weight, 'kg')}）",
-        f"💪 骨骼肌量：{rec.skeletal_muscle_kg} kg（变化：{delta(rec.skeletal_muscle_kg, prev_muscle, 'kg')}）",
         f"🫧 体脂率：{rec.body_fat_pct}%（变化：{delta(rec.body_fat_pct, prev_fat, '%')}）",
     ]
 
+    if rec.body_fat_kg:
+        lines.append(f"   脂肪量：{rec.body_fat_kg} kg")
+    if rec.subcutaneous_fat_pct or rec.subcutaneous_fat_kg:
+        sub_str = ""
+        if rec.subcutaneous_fat_pct:
+            sub_str += f"{rec.subcutaneous_fat_pct}%"
+        if rec.subcutaneous_fat_kg:
+            sub_str += f" / {rec.subcutaneous_fat_kg}kg"
+        lines.append(f"   皮下脂肪：{sub_str.strip()}")
+
+    if rec.muscle_mass_kg or rec.skeletal_muscle_kg:
+        lines.append(f"💪 肌肉量：{rec.muscle_mass_kg} kg（变化：{delta(rec.muscle_mass_kg, prev_muscle, 'kg')}）")
+        if rec.skeletal_muscle_kg:
+            lines.append(f"   骨骼肌量：{rec.skeletal_muscle_kg} kg")
+
     if rec.visceral_fat_level:
         lines.append(f"🔥 内脏脂肪：{rec.visceral_fat_level}级")
+
+    extra = []
+    if rec.bmr_kcal:
+        extra.append(f"基础代谢 {rec.bmr_kcal:.0f}kcal")
+    if rec.body_age:
+        extra.append(f"体年龄 {rec.body_age}岁")
+    if rec.health_score:
+        extra.append(f"健康评分 {rec.health_score}分")
+    if rec.body_type:
+        extra.append(f"体型 {rec.body_type}")
+    if extra:
+        lines.append("📊 " + " | ".join(extra))
 
     lines += [
         f"\n📈 距离目标",
         f"还需减重：{to_go:.1f} kg → 目标 {weight_goal} kg",
     ]
 
+    if rec.ideal_weight_kg:
+        lines.append(f"理想体重：{rec.ideal_weight_kg} kg")
     if rec.fat_to_lose_kg:
         lines.append(f"还需减脂：{rec.fat_to_lose_kg:.1f} kg")
 

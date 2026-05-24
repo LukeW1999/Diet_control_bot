@@ -43,19 +43,24 @@ class BodyComposition(Base):
     body_fat_pct = Column(Float)
     body_fat_kg = Column(Float)
 
-    muscle_mass_kg = Column(Float)
-    skeletal_muscle_kg = Column(Float)
-    fat_free_mass_kg = Column(Float)
+    muscle_mass_kg = Column(Float)       # 肌肉量
+    muscle_rate_pct = Column(Float)       # 肌肉率
+    skeletal_muscle_kg = Column(Float)    # 骨骼肌量
+    skeletal_muscle_rate_pct = Column(Float)  # 骨骼肌率
+    fat_free_mass_kg = Column(Float)      # 去脂体重
 
     protein_kg = Column(Float)
     water_kg = Column(Float)
     bone_mass_kg = Column(Float)
     subcutaneous_fat_kg = Column(Float)
+    subcutaneous_fat_pct = Column(Float)  # 皮下脂肪率
 
     visceral_fat_level = Column(Integer)
     bmr_kcal = Column(Float)
     body_age = Column(Integer)
     health_score = Column(Integer)
+    body_type = Column(String)            # 体型评估，如"肥胖型"
+    ideal_weight_kg = Column(Float)       # 理想体重
 
     weight_to_lose_kg = Column(Float)
     fat_to_lose_kg = Column(Float)
