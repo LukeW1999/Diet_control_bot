@@ -640,7 +640,7 @@ def _build_context() -> dict:
         sum(s.calorie_deficit or 0 for s in summaries) / len(summaries)
         if summaries else None
     )
-    body_history = crud.get_body_compositions_range(today - timedelta(days=90), today)
+    body_history = crud.get_body_compositions_range(today - timedelta(days=730), today)
 
     ctx = {}
     if body:
