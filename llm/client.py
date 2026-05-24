@@ -36,15 +36,21 @@ async def vision_call(system_prompt: str, user_text: str, image_b64: str, model:
     return response.choices[0].message.content
 
 
-async def text_call(system_prompt: str, user_text: str, model: str = None) -> str:
+async def text_call(
+    system_prompt: str,
+    user_text: str,
+    model: str = None,
+    history: list[dict] | None = None,
+) -> str:
     client = get_client()
     model = model or os.getenv("QWEN_TEXT_MODEL", "qwen-plus")
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
     response = await client.chat.completions.create(
         model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
+        messages=messages,
         temperature=0.7,
     )
     return response.choices[0].message.content

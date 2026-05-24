@@ -198,21 +198,21 @@ _PSYCHOLOGIST_QA_SYSTEM = """你是用户信任的心理顾问，温柔、细腻
 用户想和你聊聊——可能是哲学、生活感受、或者随便聊聊。
 
 你对他有一些了解（见"用户背景"部分），请结合背景来回应，但不要直接复述这些信息。
+对话历史已包含在上下文中，不要重复之前说过的内容。
 
-要求：
-- 自然地接住话题，不要开场白
-- 语气温暖、有智识感，像朋友在喝茶时的对话
-- 如果话题有深度，可以展开；如果他只是随口一说，轻轻回应就好
-- 不超过 150 字"""
+长度要求（严格遵守）：
+- 日常闲聊、简单回应：1-2句，不超过50字
+- 有深度的话题、需要展开：3-5句，不超过120字
+- 不要为了"显得专业"而拉长回复"""
 
 
-async def answer_as_psychologist(question: str, memory: str = "") -> str:
+async def answer_as_psychologist(question: str, memory: str = "", history: list | None = None) -> str:
     """Answer a non-diary conversational message as the psychologist."""
     parts = []
     if memory:
         parts.append(f"用户背景：{memory}")
     parts.append(f"用户说：{question}")
-    return await text_call(_PSYCHOLOGIST_QA_SYSTEM, "\n".join(parts))
+    return await text_call(_PSYCHOLOGIST_QA_SYSTEM, "\n".join(parts), history=history)
 
 
 _MORNING_QUOTE_SYSTEM = """你是用户信任的心理顾问，温柔、细腻、有智识深度，像一位真正关心他的女性朋友。
@@ -244,13 +244,19 @@ _WEEKLY_SYSTEM = """你是用户的私人健身教练，专业、严谨、真正
 
 _QA_SYSTEM = """你是用户的私人健身教练，专业、严谨、真正在乎他的健康。
 用户会问你关于减脂、饮食、训练、体成分数据的问题。
+对话历史已包含在上下文中，不要重复之前说过的内容或建议。
 
 回答要求：
 - 根据提供的数据直接回答，数字准确
 - 如果数据显示有问题，直接说出来，不要顾左右而言他
 - 给出建议时要具体，不说废话
 - 如果数据里没有相关信息，如实说
-- 语气：专业、直接、有温度，像教练和学员说话"""
+- 语气：专业、直接、有温度，像教练和学员说话
+
+长度要求（严格遵守）：
+- 常规查询、已聊过的话题：2-3句，直接给数字或结论
+- 发现异常、新数据值得分析：适当展开，但不超过150字
+- 不要每次都给"下一步建议"——只在有新发现时才给"""
 
 
 async def generate_weekly_report(user_data: dict) -> str:
@@ -258,13 +264,17 @@ async def generate_weekly_report(user_data: dict) -> str:
     return await text_call(_WEEKLY_SYSTEM, content)
 
 
-async def answer_question(question: str, context: dict) -> str:
+async def answer_question(question: str, context: dict, history: list | None = None) -> str:
     food_context = await _grep_skill(question)
     context_str = _format_context(context)
     full_context = context_str
     if food_context:
         full_context += f"\n\n饮食历史记录：\n{food_context}"
-    return await text_call(_QA_SYSTEM, f"用户数据：\n{full_context}\n\n用户问题：{question}")
+    return await text_call(
+        _QA_SYSTEM,
+        f"用户数据：\n{full_context}\n\n用户问题：{question}",
+        history=history,
+    )
 
 
 _GREP_SKILL_PROMPT = f"""今天是 {date.today()}。你是一个食物日志搜索助手。

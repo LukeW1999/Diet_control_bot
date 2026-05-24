@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 # Album (multi-photo) state: media_group_id -> {images, update, wait_msg}
 _pending_albums: dict = {}
 _background_tasks: set = set()  # keep task references to prevent GC
+_conversation_history: list[dict] = []  # last N turns for multi-turn context
+_MAX_HISTORY_TURNS = 8  # keep 8 exchanges (16 messages)
+
+
+def _append_history(user_text: str, assistant_text: str) -> None:
+    _conversation_history.append({"role": "user", "content": user_text})
+    _conversation_history.append({"role": "assistant", "content": assistant_text})
+    # Trim to last N turns
+    max_msgs = _MAX_HISTORY_TURNS * 2
+    if len(_conversation_history) > max_msgs:
+        del _conversation_history[:-max_msgs]
 
 
 def _allowed(update: Update) -> bool:
@@ -354,6 +365,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         memory = load_psych_memory()
         response = await analyst.generate_diary_response(diary.get("content", text), diary.get("mood", ""), memory)
         await update.message.reply_text(f"📔 {rec.date} {mood_str}\n\n{response}")
+        _append_history(text, response)
         async def _update_memory():
             new_mem = await analyst.update_psych_memory(memory, diary.get("content", text), diary.get("mood", ""))
             if new_mem:
@@ -426,15 +438,17 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         wait = await update.message.reply_text("思考中...")
         from utils.psych_memory import load_psych_memory
         memory = load_psych_memory()
-        answer = await analyst.answer_as_psychologist(text, memory)
+        answer = await analyst.answer_as_psychologist(text, memory, history=list(_conversation_history))
         await wait.edit_text(answer)
+        _append_history(text, answer)
         return
 
     # Coach: health/diet/workout queries
     wait = await update.message.reply_text("查询中...")
     ctx_data = _build_context()
-    answer = await analyst.answer_question(text, ctx_data)
+    answer = await analyst.answer_question(text, ctx_data, history=list(_conversation_history))
     await wait.edit_text(answer)
+    _append_history(text, answer)
 
 
 # ── Callback query (inline keyboard) ─────────────────────────────────────────
