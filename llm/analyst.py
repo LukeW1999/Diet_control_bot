@@ -3,6 +3,61 @@ from datetime import date, timedelta
 from .client import text_call
 from utils.food_log import search, get_recent, get_by_date, get_high_calorie_days
 
+_NOTE_CLASSIFY_SYSTEM = """用户发来了一段工作或学习内容，请判断分类并提取信息，以JSON返回：
+{
+  "is_note": true/false,
+  "category": "work/study/programming/idea/other",
+  "summary": "一句话总结（10字以内）",
+  "content": "整理后的笔记内容（保留要点，去掉口语化表达）"
+}
+
+分类说明：
+- work：工作任务、会议、项目进展
+- study：读书、课程、论文、学术内容
+- programming：代码、技术、开发相关
+- idea：灵感、想法、计划
+- other：不属于以上的笔记内容
+
+如果这段文字明显不是笔记（比如问问题、聊天），返回 {"is_note": false}"""
+
+_WEEKLY_NOTES_SYSTEM = """你是一个笔记整理助手。用户给你发来了这周每天的工作和学习笔记，
+请帮他整理成一份结构清晰的周报，按以下结构输出：
+
+## 本周工作
+（列出主要工作内容）
+
+## 本周学习
+（列出学习收获）
+
+## 想法与灵感
+（如有）
+
+## 下周计划建议
+（根据本周内容，提1-2个建议）
+
+语气简洁，用 bullet point，字数控制在300字以内。"""
+
+
+async def classify_note(text: str) -> dict | None:
+    """Classify user input as a note and extract structured content."""
+    if len(text) < 5:
+        return None
+    raw = await text_call(_NOTE_CLASSIFY_SYSTEM, text)
+    try:
+        import json, re
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group()) if m else {}
+        return data if data.get("is_note") else None
+    except Exception:
+        return None
+
+
+async def generate_weekly_notes_summary(notes_text: str) -> str:
+    if not notes_text.strip():
+        return "这周还没有笔记记录。"
+    return await text_call(_WEEKLY_NOTES_SYSTEM, notes_text)
+
+
 _DIARY_SYSTEM = """用户发来了一段文字，可能是今天的日记或心情记录。
 请提取以下信息，以JSON返回，不要返回其他内容：
 {

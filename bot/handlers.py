@@ -189,6 +189,16 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     text = update.message.text.strip()
 
+    # Note detection
+    note = await analyst.classify_note(text)
+    if note:
+        from utils.notes import save_note, CATEGORY_ICONS
+        save_note(date.today(), note.get("category", "other"), note.get("content", text))
+        label = CATEGORY_ICONS.get(note.get("category", "other"), "📝 其他")
+        summary = note.get("summary", "")
+        await update.message.reply_text(f"📌 已记录到「{label}」\n{summary}")
+        return
+
     # Diary / mood entry detection
     diary = await analyst.detect_diary(text)
     if diary:

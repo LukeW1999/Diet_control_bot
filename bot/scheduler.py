@@ -38,10 +38,29 @@ def start_scheduler(bot: Bot, chat_id: str) -> AsyncIOScheduler:
     )
 
     scheduler.add_job(
+        _notes_reminder,
+        "cron",
+        hour=16,
+        minute=0,
+        timezone=UK_TZ,
+        kwargs={"bot": bot, "chat_id": chat_id},
+    )
+
+    scheduler.add_job(
         _weekly_report,
         "cron",
         day_of_week=weekly_day,
         hour=9,
+        minute=0,
+        timezone=UK_TZ,
+        kwargs={"bot": bot, "chat_id": chat_id},
+    )
+
+    scheduler.add_job(
+        _weekly_notes_summary,
+        "cron",
+        day_of_week="sunday",
+        hour=20,
         minute=0,
         timezone=UK_TZ,
         kwargs={"bot": bot, "chat_id": chat_id},
@@ -153,6 +172,32 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
         ]
 
     await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+
+
+async def _notes_reminder(bot: Bot, chat_id: str) -> None:
+    from utils.notes import get_today_notes
+    today_notes = get_today_notes(date.today())
+    if today_notes:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="📝 下午好！今天已经有笔记了，还有什么要补充吗？",
+        )
+    else:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="📝 下午好！记录一下今天的工作或学习内容吧，发给我就行。",
+        )
+
+
+async def _weekly_notes_summary(bot: Bot, chat_id: str) -> None:
+    from utils.notes import get_week_notes
+    from llm.analyst import generate_weekly_notes_summary
+    today = date.today()
+    start = today - timedelta(days=6)
+    notes_text = get_week_notes(start, today)
+    await bot.send_message(chat_id=chat_id, text="📚 正在整理本周笔记...")
+    summary = await generate_weekly_notes_summary(notes_text)
+    await bot.send_message(chat_id=chat_id, text=f"📚 本周笔记整理\n\n{summary}")
 
 
 async def _weekly_report(bot: Bot, chat_id: str) -> None:
