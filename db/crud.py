@@ -71,7 +71,7 @@ def upsert_body_composition(data: dict, image_path: str, raw_response: str) -> B
 
         for field in [
             "weight_kg", "bmi", "body_fat_pct", "body_fat_kg",
-            "muscle_mass_kg", "skeletal_muscle_kg", "fat_free_mass_kg",
+            "skeletal_muscle_kg", "fat_free_mass_kg",
             "protein_kg", "water_kg", "bone_mass_kg", "subcutaneous_fat_kg",
             "visceral_fat_level", "bmr_kcal", "body_age", "health_score",
             "weight_to_lose_kg", "fat_to_lose_kg",
@@ -79,6 +79,11 @@ def upsert_body_composition(data: dict, image_path: str, raw_response: str) -> B
             val = data.get(field)
             if val is not None:
                 setattr(rec, field, val)
+
+        # muscle_mass_kg always stores 骨骼肌量 regardless of what LLM puts in muscle_mass_kg
+        skeletal = data.get("skeletal_muscle_kg")
+        if skeletal is not None:
+            rec.muscle_mass_kg = skeletal
 
         rec.image_path = image_path
         rec.raw_llm_response = raw_response
