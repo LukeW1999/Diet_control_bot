@@ -343,7 +343,9 @@ async def _process_album_delayed(media_group_id: str) -> None:
                 for k, v in data.items():
                     if v is not None and merged.get(k) is None:
                         merged[k] = v
-            merged["date"] = today_str
+            # Use date from image if parsed; fall back to today
+            if not merged.get("date"):
+                merged["date"] = today_str
             prev = crud.get_latest_body_composition()
             rec = crud.upsert_body_composition(merged, "album", str(merged))
             reply = _format_body_reply(rec, prev)
@@ -365,14 +367,16 @@ async def _process_single_photo(b64: str, image_bytes: bytes, update: Update,
         if image_type == "diet":
             filepath, enc = save_and_encode(image_bytes, "diet")
             data, raw = await parsers.parse_diet_image(enc)
-            data["date"] = today_str
+            if not data.get("date"):
+                data["date"] = today_str
             rec = crud.upsert_diet_record(data, filepath, raw)
             reply = _format_diet_reply(data, rec)
 
         elif image_type == "body":
             filepath, enc = save_and_encode(image_bytes, "body")
             data, raw = await parsers.parse_body_composition_image(enc)
-            data["date"] = today_str
+            if not data.get("date"):
+                data["date"] = today_str
             prev = crud.get_latest_body_composition()
             rec = crud.upsert_body_composition(data, filepath, raw)
             reply = _format_body_reply(rec, prev)
