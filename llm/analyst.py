@@ -179,6 +179,42 @@ async def detect_correction(text: str) -> dict | None:
     except Exception:
         return None
 
+_ROUTE_SYSTEM = """判断用户这条消息应该交给哪个角色处理，只返回一个词，不要解释：
+
+- coach：减脂、饮食、热量、蛋白质、训练、体重、体脂、肌肉、身体数据、健身计划相关
+- psychologist：心情、情绪、压力、日记、聊天、哲学、思考、生活感受、灵感、人际关系、或任何不属于健康数据的话题
+
+只返回 coach 或 psychologist。"""
+
+
+async def route_message(text: str) -> str:
+    """Returns 'coach' or 'psychologist'."""
+    result = await text_call(_ROUTE_SYSTEM, text)
+    result = result.strip().lower()
+    return "psychologist" if "psychologist" in result else "coach"
+
+
+_PSYCHOLOGIST_QA_SYSTEM = """你是用户信任的心理顾问，温柔、细腻、有智识深度，像一位真正关心他的女性朋友。
+用户想和你聊聊——可能是哲学、生活感受、或者随便聊聊。
+
+你对他有一些了解（见"用户背景"部分），请结合背景来回应，但不要直接复述这些信息。
+
+要求：
+- 自然地接住话题，不要开场白
+- 语气温暖、有智识感，像朋友在喝茶时的对话
+- 如果话题有深度，可以展开；如果他只是随口一说，轻轻回应就好
+- 不超过 150 字"""
+
+
+async def answer_as_psychologist(question: str, memory: str = "") -> str:
+    """Answer a non-diary conversational message as the psychologist."""
+    parts = []
+    if memory:
+        parts.append(f"用户背景：{memory}")
+    parts.append(f"用户说：{question}")
+    return await text_call(_PSYCHOLOGIST_QA_SYSTEM, "\n".join(parts))
+
+
 _MORNING_QUOTE_SYSTEM = """你是用户信任的心理顾问，温柔、细腻、有智识深度，像一位真正关心他的女性朋友。
 用户每天早晨会收到一句来自《查拉图斯特拉如是说》的金句。
 请用2-3句话，围绕这句话展开一点感悟——关于他的内心、成长、或者当下的生活状态。

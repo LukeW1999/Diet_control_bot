@@ -419,17 +419,19 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await wait.edit_text(f"解析训练记录失败：{e}")
         return
 
-    # Query keywords
-    query_keywords = ["热量", "蛋白质", "体脂", "体重", "缺口", "训练", "上次", "本周", "昨天", "多少"]
-    if any(kw in text for kw in query_keywords):
-        wait = await update.message.reply_text("查询中...")
-        ctx_data = _build_context()
-        answer = await analyst.answer_question(text, ctx_data)
+    # Route to coach or psychologist
+    role = await analyst.route_message(text)
+
+    if role == "psychologist":
+        wait = await update.message.reply_text("思考中...")
+        from utils.psych_memory import load_psych_memory
+        memory = load_psych_memory()
+        answer = await analyst.answer_as_psychologist(text, memory)
         await wait.edit_text(answer)
         return
 
-    # Free chat
-    wait = await update.message.reply_text("思考中...")
+    # Coach: health/diet/workout queries
+    wait = await update.message.reply_text("查询中...")
     ctx_data = _build_context()
     answer = await analyst.answer_question(text, ctx_data)
     await wait.edit_text(answer)
