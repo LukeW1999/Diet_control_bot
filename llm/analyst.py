@@ -207,39 +207,53 @@ _PSYCHOLOGIST_QA_SYSTEM = """你是用户信任的心理顾问，温柔、细腻
 - 不要为了"显得专业"而拉长回复"""
 
 
-_BOOK_GREP_SYSTEM = """用户在聊书籍或某段内容。判断是否需要在《查拉图斯特拉如是说》全文中搜索。
+_BOOK_GREP_SYSTEM = """用户在聊书籍或某段内容，可能涉及哲学、心理、商业、政治等领域书籍。
 
-如果需要搜索，只返回一个最关键的中文搜索词（2-6个字，越精准越好）。
-如果不需要（比如只是泛泛聊感受），返回 NONE。
+可用书库：哲学、心理学、政治学、商业经济类书籍（中文）。
+
+判断是否需要搜索书库：
+- 如果需要，只返回最关键的中文搜索词（2-6个字），例如：超人/集体无意识/权力意志
+- 如果只是泛泛聊感受，或问题不涉及具体书籍内容，返回 NONE
 
 只返回搜索词或 NONE，不要其他内容。"""
 
+_BOOK_REFINE_SYSTEM = """你刚刚搜索书库得到了一些段落，用户问的是：{question}
+
+根据这些段落，判断是否还需要补充搜索：
+- 如果段落已经足够回答用户的问题，返回 NONE
+- 如果段落提示了一个更精准的关键词（如章节名、人名、概念），返回这个词（2-6个字）
+
+只返回补充搜索词或 NONE。"""
+
 
 async def _book_grep_skill(question: str) -> str:
-    """Two-pass book search: ask Qwen for keyword, grep, optionally refine."""
-    from utils.book_search import grep_book
+    """Multi-pass book search across all books in data/books/."""
+    from utils.book_search import grep_books, format_results
 
-    # Pass 1: get keyword
-    keyword = await text_call(_BOOK_GREP_SYSTEM, question)
-    keyword = keyword.strip()
+    # Pass 1: decide whether to search and get first keyword
+    keyword = (await text_call(_BOOK_GREP_SYSTEM, question)).strip()
     if keyword.upper() == "NONE" or not keyword:
         return ""
 
-    passages = grep_book(keyword)
-    if not passages:
+    results = grep_books(keyword)
+    if not results:
         return ""
 
-    # Pass 2: if passages mention a chapter title, try to grep that too
-    import re
-    chapter_match = re.search(r"[「《【]([^」》】]{2,10})[」》】]", passages)
-    if chapter_match:
-        chapter_kw = chapter_match.group(1)
-        if chapter_kw != keyword:
-            extra = grep_book(chapter_kw, context_chars=150)
-            if extra and extra not in passages:
-                passages += f"\n\n---\n\n{extra}"
+    combined = format_results(results)
 
-    return passages
+    # Pass 2: ask if a refinement search would help (max 1 extra pass)
+    refine_prompt = _BOOK_REFINE_SYSTEM.format(question=question)
+    refine_kw = (await text_call(refine_prompt, combined[:800])).strip()
+    if refine_kw and refine_kw.upper() != "NONE" and refine_kw != keyword:
+        extra = grep_books(refine_kw)
+        if extra:
+            # Add new results not already covered
+            existing_snippets = {r["snippet"] for r in results}
+            new = [r for r in extra if r["snippet"] not in existing_snippets]
+            if new:
+                combined += "\n\n---\n\n" + format_results(new)
+
+    return combined
 
 
 async def answer_as_psychologist(question: str, memory: str = "", history: list | None = None) -> str:

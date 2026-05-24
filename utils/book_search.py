@@ -1,70 +1,90 @@
 """
-Local grep over zarathustra_full.txt.
-Returns compact passage snippets to minimise token usage.
+Search across all books in data/books/.
+Returns compact snippets (book name + context) to minimise token usage.
 """
 import os
 import re
 
-_FULL_TEXT_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "zarathustra_full.txt"
-)
-
-_CONTEXT_CHARS = 200   # chars to show before/after match
-_MAX_MATCHES = 3       # cap results to save tokens
+_BOOKS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "books")
+_CONTEXT_CHARS = 250
+_MAX_MATCHES_PER_BOOK = 2
+_MAX_TOTAL = 5
 
 
-def _load_lines() -> list[str]:
-    if not os.path.exists(_FULL_TEXT_PATH):
+def _list_books() -> list[tuple[str, str]]:
+    """Return list of (display_name, filepath) for all books."""
+    if not os.path.isdir(_BOOKS_DIR):
         return []
-    with open(_FULL_TEXT_PATH, encoding="utf-8") as f:
-        return f.readlines()
+    results = []
+    for fname in sorted(os.listdir(_BOOKS_DIR)):
+        if fname.endswith(".txt"):
+            display = fname.replace(".txt", "").replace("_", " ")
+            results.append((display, os.path.join(_BOOKS_DIR, fname)))
+    return results
 
 
-def grep_book(keyword: str, context_chars: int = _CONTEXT_CHARS) -> str:
+def grep_books(keyword: str, context_chars: int = _CONTEXT_CHARS) -> list[dict]:
     """
-    Search full text for keyword, return up to _MAX_MATCHES snippets
-    with surrounding context. Returns empty string if not found.
+    Search all books for keyword.
+    Returns list of {book, snippet} dicts, capped at _MAX_TOTAL.
     """
     if not keyword or not keyword.strip():
-        return ""
+        return []
 
-    lines = _load_lines()
-    if not lines:
-        return ""
+    kw = keyword.strip()
+    all_results = []
 
-    full = "".join(lines)
-    pattern = re.compile(re.escape(keyword.strip()), re.IGNORECASE)
-    matches = list(pattern.finditer(full))
+    for display, fpath in _list_books():
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                full = f.read()
+        except OSError:
+            continue
 
-    if not matches:
-        # Try fuzzy: split keyword and search for any part
-        parts = keyword.strip().split()
-        for part in parts:
-            if len(part) >= 2:
+        pattern = re.compile(re.escape(kw), re.IGNORECASE)
+        matches = list(pattern.finditer(full))
+
+        if not matches:
+            # Fuzzy: try each character pair as substring
+            for part in re.findall(r"[一-鿿]{2,}", kw):
                 pattern = re.compile(re.escape(part), re.IGNORECASE)
                 matches = list(pattern.finditer(full))
                 if matches:
                     break
 
-    if not matches:
-        return ""
+        seen_pos: list[int] = []
+        book_count = 0
+        for m in matches:
+            if book_count >= _MAX_MATCHES_PER_BOOK:
+                break
+            if any(abs(m.start() - p) < context_chars for p in seen_pos):
+                continue
+            seen_pos.append(m.start())
 
-    snippets = []
-    seen_positions = []
-    for m in matches:
-        # Skip if too close to a previously included match
-        if any(abs(m.start() - p) < context_chars for p in seen_positions):
-            continue
-        seen_positions.append(m.start())
+            start = max(0, m.start() - context_chars)
+            end = min(len(full), m.end() + context_chars)
+            snippet = full[start:end].strip()
+            snippet = re.sub(r"\n{2,}", "\n", snippet)
+            all_results.append({"book": display, "snippet": f"…{snippet}…"})
+            book_count += 1
 
-        start = max(0, m.start() - context_chars)
-        end = min(len(full), m.end() + context_chars)
-        snippet = full[start:end].strip()
-        # Clean up whitespace
-        snippet = re.sub(r"\n{2,}", "\n", snippet)
-        snippets.append(f"…{snippet}…")
+            if len(all_results) >= _MAX_TOTAL:
+                break
 
-        if len(snippets) >= _MAX_MATCHES:
+        if len(all_results) >= _MAX_TOTAL:
             break
 
-    return "\n\n---\n\n".join(snippets)
+    return all_results
+
+
+def format_results(results: list[dict]) -> str:
+    if not results:
+        return ""
+    parts = []
+    for r in results:
+        parts.append(f"[{r['book']}]\n{r['snippet']}")
+    return "\n\n---\n\n".join(parts)
+
+
+def list_available_books() -> list[str]:
+    return [display for display, _ in _list_books()]
