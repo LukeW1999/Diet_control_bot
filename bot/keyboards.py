@@ -19,7 +19,6 @@ def main_menu() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("生成周报", callback_data="report")],
         [InlineKeyboardButton("🥗 记营养表", callback_data="nutrition_on")],
-        [InlineKeyboardButton("🧪 模型测试", callback_data="test_menu")],
     ])
 
 

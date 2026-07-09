@@ -8,7 +8,7 @@ from telegram import BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from bot.handlers import (
     cmd_start, cmd_today, cmd_week, cmd_body, cmd_workout, cmd_report,
-    cmd_profile, cmd_update, cmd_stats, cmd_mode, cmd_server, cmd_test, _server_watch,
+    cmd_profile, cmd_update, cmd_stats, cmd_mode, cmd_server, _server_watch,
     handle_photo, handle_text, handle_document, handle_callback,
 )
 
@@ -23,7 +23,6 @@ _COMMANDS = [
     BotCommand("profile", "个人资料 / BMR"),
     BotCommand("report", "生成周报"),
     BotCommand("mode", "切换对话模式"),
-    BotCommand("test", "模型测试上传"),
 ]
 
 
@@ -57,7 +56,6 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("mode", cmd_mode))
     app.add_handler(CommandHandler("server", cmd_server))
-    app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

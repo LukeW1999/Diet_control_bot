@@ -10,8 +10,7 @@ from telegram.ext import ContextTypes
 
 from db import crud
 from llm import parsers, analyst
-from utils.image import save_and_encode
-from utils.media_store import save_image as _media_save_image, save_document as _media_save_doc
+from utils.media_store import save_document as _media_save_doc
 from .keyboards import main_menu, mode_menu, MODE_LABELS
 
 logger = logging.getLogger(__name__)
@@ -19,11 +18,6 @@ logger = logging.getLogger(__name__)
 _chat_mode: str = "auto"  # "auto" | "coach" | "psychologist"
 
 _CONV_LOG = os.path.join(os.path.dirname(__file__), "..", "data", "conversation_log.jsonl")
-_DEBUG_IMAGE = os.path.join(os.path.dirname(__file__), "..", "data", "images", "debug_last.jpg")
-_MODEL_TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "model_test")
-
-# When True, incoming photos are saved raw (no LLM parsing) for model benchmarking.
-_test_upload_mode: bool = False
 
 # When True, the next photo is parsed as an English nutrition label (one-shot).
 _nutrition_mode: bool = False
@@ -40,8 +34,6 @@ def _log_event(event: dict) -> None:
     except Exception:
         pass
 
-# Album (multi-photo) state: media_group_id -> {images, update, wait_msg}
-_pending_albums: dict = {}
 _background_tasks: set = set()  # keep task references to prevent GC
 _conversation_history: list[dict] = []  # last N turns for multi-turn context
 _MAX_HISTORY_TURNS = 8  # keep 8 exchanges (16 messages)
@@ -157,27 +149,6 @@ async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
-async def cmd_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Model-benchmark upload entry. Button-driven (方案A style)."""
-    if not _allowed(update):
-        return
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🧪 开始上传营养表照片", callback_data="test_start")],
-        [InlineKeyboardButton("✅ 结束测试", callback_data="test_stop")],
-    ])
-    state = "开启中" if _test_upload_mode else "关闭"
-    await update.message.reply_text(
-        "🧪 模型测试上传\n\n"
-        f"当前状态：{state}\n\n"
-        "点「开始上传」后，你发的图片会**只保存、不解析**，\n"
-        "我用它对比不同 Qwen 模型读营养表的效果。\n"
-        "测完点「结束测试」恢复正常（薄荷截图自动记录）。",
-        reply_markup=kb,
-        parse_mode="Markdown",
-    )
-
-
 def _allowed(update: Update) -> bool:
     allowed = os.getenv("ALLOWED_CHAT_ID", "")
     if not allowed or allowed == "YOUR_CHAT_ID_HERE":
@@ -196,17 +167,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "👋 健康管理 Bot 已启动！\n\n"
         f"你的 Chat ID：`{update.effective_chat.id}`\n"
         "请把这个 ID 填入 .env 文件的 ALLOWED_CHAT_ID。\n\n"
-        "📸 发图片给我：\n"
-        "  • 薄荷健康饮食截图 → 记录今日饮食\n"
-        "  • 体重秤身体成分报告 → 记录体成分\n\n"
+        "🥗 记营养表：点下面的「记营养表」按钮，再发英文营养标签照片\n\n"
         "💬 发文字给我：\n"
         "  • 训练记录（如 深蹲80kg 5组5次）\n"
-        "  • 今天体重 91.2\n"
         "  • 任何关于你健康数据的问题\n\n"
+        "📊 每天数据（吃/练/体重/体脂）由 HealthKit 自动同步\n\n"
         "📋 指令：/today /week /body /workout /report /profile /update\n\n"
         "💡 /profile 查看个人资料和当前 BMR\n"
         "/update age 27 · /update height 172 · /update gender male\n"
-        "/update goal 74.8 · /update protein 1.8",
+        "/update goal 75.0 · /update protein 1.8",
         parse_mode="Markdown",
         reply_markup=main_menu(),
     )
@@ -466,161 +435,11 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await wait_msg.edit_text(f"解析失败：{e}")
         return
 
-    # Model-benchmark mode: save raw, skip all parsing.
-    if _test_upload_mode:
-        os.makedirs(_MODEL_TEST_DIR, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        n = len([f for f in os.listdir(_MODEL_TEST_DIR) if f.endswith((".jpg", ".jpeg", ".png"))]) + 1
-        fname = f"test{n:02d}_{stamp}.jpg"
-        with open(os.path.join(_MODEL_TEST_DIR, fname), "wb") as _f:
-            _f.write(image_bytes)
-        await update.message.reply_text(
-            f"🧪 已保存：{fname}（{len(image_bytes)//1024} KB）\n"
-            "再发下一张，或点 /test 里的「结束测试」。"
-        )
-        logger.info("Model-test image saved: %s", fname)
-        return
-
-    media_group_id = update.message.media_group_id
-
-    # Always persist received images for debugging
-    try:
-        if media_group_id:
-            idx = len(_pending_albums.get(media_group_id, {}).get("images", [])) + 1
-            if idx == 1:  # clear old album debug files on new album
-                import glob
-                for old in glob.glob(_DEBUG_IMAGE.replace("debug_last.jpg", "debug_album_*.jpg")):
-                    os.remove(old)
-            debug_path = _DEBUG_IMAGE.replace("debug_last.jpg", f"debug_album_{idx}.jpg")
-        else:
-            debug_path = _DEBUG_IMAGE
-        with open(debug_path, "wb") as _f:
-            _f.write(image_bytes)
-        logger.info("Saved debug image [%s]: %d bytes", debug_path, len(image_bytes))
-    except Exception as _e:
-        logger.warning("Could not save debug image: %s", _e)
-
-    if media_group_id:
-        # Album: collect all photos then process together
-        if media_group_id not in _pending_albums:
-            wait_msg = await update.message.reply_text("正在收集图片...")
-            _pending_albums[media_group_id] = {
-                "images": [b64],
-                "raw": [image_bytes],
-                "update": update,
-                "ctx": ctx,
-                "wait_msg": wait_msg,
-            }
-            task = asyncio.create_task(_process_album_delayed(media_group_id))
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
-        else:
-            _pending_albums[media_group_id]["images"].append(b64)
-            _pending_albums[media_group_id].setdefault("raw", []).append(image_bytes)
-    else:
-        wait_msg = await update.message.reply_text("正在分析图片，请稍等...")
-        await _process_single_photo(b64, image_bytes, update, ctx, wait_msg)
-
-
-async def _process_album_delayed(media_group_id: str) -> None:
-    await asyncio.sleep(3.0)  # wait for all photos in album to arrive
-    entry = _pending_albums.pop(media_group_id, None)
-    if not entry:
-        return
-
-    images = entry["images"]
-    update = entry["update"]
-    wait_msg = entry["wait_msg"]
-    today_str = str(date.today())
-
-    try:
-        await wait_msg.edit_text(f"正在分析 {len(images)} 张图片，请稍等...")
-
-        # Classify by first image
-        image_type = await parsers.classify_image(images[0])
-
-        if image_type == "body":
-            merged: dict = {}
-            for b64 in images:
-                data, _ = await parsers.parse_body_composition_image(b64)
-                for k, v in data.items():
-                    if v is not None and merged.get(k) is None:
-                        merged[k] = v
-            # Use date from image if parsed; fall back to today
-            if not merged.get("date"):
-                merged["date"] = today_str
-            prev = crud.get_latest_body_composition()
-            rec = crud.upsert_body_composition(merged, "album", str(merged))
-            reply = _format_body_reply(rec, prev)
-        else:
-            reply = f"相册目前仅支持身体成分报告（识别为 {image_type}）。"
-
-        # Save each raw image to media store for Hermes
-        for raw in entry.get("raw", []):
-            try:
-                _media_save_image(raw, image_type)
-            except Exception:
-                pass
-
-        await wait_msg.edit_text(reply, parse_mode="Markdown")
-        _log_event({"type": f"photo_album_{image_type}", "n_images": len(images), "response": reply})
-    except Exception as e:
-        logger.exception("Album processing error")
-        err = f"解析失败：{e}"
-        await wait_msg.edit_text(err + "\n\n请重新发图或手动输入数据。")
-        _log_event({"type": "photo_album_error", "error": str(e)})
-
-
-async def _process_single_photo(b64: str, image_bytes: bytes, update: Update,
-                                 ctx: ContextTypes.DEFAULT_TYPE, wait_msg) -> None:
-    try:
-        image_type = await parsers.classify_image(b64)
-        today_str = str(date.today())
-
-        # Save to media store for Hermes (timestamped copy)
-        try:
-            _media_save_image(image_bytes, image_type)
-        except Exception:
-            pass
-
-        if image_type == "diet":
-            filepath, enc = save_and_encode(image_bytes, "diet")
-            data, raw = await parsers.parse_diet_image(enc)
-            if not data.get("date"):
-                data["date"] = today_str
-            rec = crud.upsert_diet_record(data, filepath, raw)
-            reply = _format_diet_reply(data, rec)
-
-        elif image_type == "body":
-            filepath, enc = save_and_encode(image_bytes, "body")
-            data, raw = await parsers.parse_body_composition_image(enc)
-            if not data.get("date"):
-                data["date"] = today_str
-            prev = crud.get_latest_body_composition()
-            rec = crud.upsert_body_composition(data, filepath, raw)
-            reply = _format_body_reply(rec, prev)
-
-        elif image_type == "weight_history":
-            filepath, enc = save_and_encode(image_bytes, "body")
-            records, raw = await parsers.parse_weight_history_image(enc)
-            saved = 0
-            for r in records:
-                if r.get("weight_kg"):
-                    crud.quick_weight_entry(_parse_date(r["date"]), r["weight_kg"])
-                    saved += 1
-            reply = f"✅ 已导入 {saved} 条体重历史记录"
-
-        else:
-            reply = "这张图片我识别不出来，请发薄荷饮食截图或体成分报告截图。"
-
-        await wait_msg.edit_text(reply, parse_mode="Markdown")
-        _log_event({"type": f"photo_{image_type}", "response": reply})
-
-    except Exception as e:
-        logger.exception("Error handling photo")
-        err = f"解析失败：{e}"
-        await wait_msg.edit_text(err + "\n\n请重新发图或手动输入数据。")
-        _log_event({"type": "photo_error", "error": str(e)})
+    # Photos are only used for English nutrition labels now — guide to the button.
+    await update.message.reply_text(
+        "要记营养标签，先点下面的 🥗 记营养表 按钮，再发图片。",
+        reply_markup=main_menu(),
+    )
 
 
 # ── Text handler ───────────────────────────────────────────────────────────────
@@ -857,7 +676,7 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 # ── Callback query (inline keyboard) ─────────────────────────────────────────
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    global _test_upload_mode, _nutrition_mode
+    global _nutrition_mode
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -874,34 +693,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         _chat_mode = data.split(":")[1]
         label = MODE_LABELS[_chat_mode]
         await query.edit_message_text(f"已切换到 {label} 模式", reply_markup=mode_menu(_chat_mode))
-        return
-
-    if data == "test_menu":
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🧪 开始上传营养表照片", callback_data="test_start")],
-            [InlineKeyboardButton("✅ 结束测试", callback_data="test_stop")],
-        ])
-        state = "开启中" if _test_upload_mode else "关闭"
-        await query.edit_message_text(
-            "🧪 模型测试上传\n\n"
-            f"当前状态：{state}\n\n"
-            "点「开始上传」后，你发的图片只保存、不解析，\n"
-            "我用它对比不同 Qwen 模型读营养表的效果。\n"
-            "测完点「结束测试」恢复正常记录。",
-            reply_markup=kb,
-        )
-        return
-
-    if data == "test_start":
-        _test_upload_mode = True
-        await query.edit_message_text(
-            "🧪 测试上传已开启。\n现在发营养表照片给我，只保存不解析。\n发完告诉我图里写了什么。"
-        )
-        return
-    if data == "test_stop":
-        _test_upload_mode = False
-        await query.edit_message_text("✅ 测试上传已关闭，恢复正常记录。")
         return
 
     if data == "today":
@@ -953,51 +744,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 # ── Formatting helpers ─────────────────────────────────────────────────────────
-
-def _format_diet_reply(data: dict, rec) -> str:
-    s = data.get("summary", {})
-    total = s.get("total_calories", 0) or 0
-    exercise = s.get("exercise_calories", 0) or 0
-    budget = s.get("budget_calories", 0) or 0
-    over = s.get("over_budget", 0) or 0
-    net = total - exercise
-
-    protein = s.get("protein_g", 0) or 0
-    protein_goal = s.get("protein_goal_g", 0) or 0
-    carbs = s.get("carbs_g", 0) or 0
-    carbs_goal = s.get("carbs_goal_g", 0) or 0
-    fat = s.get("fat_g", 0) or 0
-    fat_goal = s.get("fat_goal_g", 0) or 0
-
-    protein_icon = "✅" if protein >= protein_goal else "⚠️"
-    carbs_icon = "✅" if carbs <= carbs_goal else "⚠️"
-    fat_icon = "✅" if fat <= fat_goal else "⚠️"
-
-    budget_str = f"超出 {over:.0f}" if over > 0 else f"缺口 {abs(over):.0f}"
-
-    lines = [
-        f"✅ {data.get('date', '今日')} 饮食已记录\n",
-        f"🔥 总摄入：{total:.0f} kcal（预算 {budget:.0f}，{budget_str}）",
-        f"🏃 运动消耗：{exercise:.0f} kcal（净摄入 {net:.0f}）\n",
-        f"🥩 蛋白质：{protein:.0f}g / 目标 {protein_goal:.0f}g {protein_icon}",
-        f"🍚 碳水：{carbs:.0f}g / 目标 {carbs_goal:.0f}g {carbs_icon}",
-        f"🧈 脂肪：{fat:.0f}g / 目标 {fat_goal:.0f}g {fat_icon}\n",
-        "📋 今日食物",
-    ]
-
-    meals = data.get("meals", [])
-    meal_labels = {"breakfast": "早餐", "lunch": "午餐", "dinner": "晚餐", "snack": "加餐"}
-    for meal in meals:
-        label = meal_labels.get(meal.get("meal_type", ""), meal.get("meal_type", ""))
-        cal = meal.get("total_calories", 0)
-        foods = meal.get("foods", [])
-        food_str = "、".join(f"{f['name']} {f.get('amount', '')}" for f in foods[:4])
-        if len(foods) > 4:
-            food_str += f" 等{len(foods)}项"
-        lines.append(f"{label} {cal:.0f} kcal：{food_str}")
-
-    return "\n".join(lines)
-
 
 def _format_body_reply(rec, prev) -> str:
     def delta(curr, prev_val, unit="", fmt=".1f"):
