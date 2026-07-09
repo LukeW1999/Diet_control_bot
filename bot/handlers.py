@@ -815,21 +815,24 @@ def _build_today_summary(today: date) -> str:
     summary = crud.get_daily_summary(today)
     body = crud.get_latest_body_composition()
 
-    if not diet and not summary:
-        return f"📅 {today}\n\n今天还没有饮食记录。发薄荷截图给我吧 📸"
-
     lines = [f"📅 今日汇总（{today}）\n"]
 
     if diet:
-        bmr = crud.get_bmr()
+        summ = crud.get_daily_summary(today)
+        bmr = summ.bmr if summ and summ.bmr else crud.get_bmr()
         net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
-        deficit = bmr - net
+        deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None else bmr - net
         lines += [
             f"🔥 摄入：{diet.total_calories:.0f} kcal | 运动：{diet.exercise_calories:.0f} kcal",
             f"📉 热量缺口：{deficit:.0f} kcal",
-            f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g",
+            f"🥩 蛋白质：{diet.protein_g:.0f}g / {(diet.protein_goal_g or 0):.0f}g",
             f"🍚 碳水：{diet.carbs_g:.0f}g | 🧈 脂肪：{diet.fat_g:.0f}g",
         ]
+    else:
+        lines.append(
+            "今天的数据还没同步。\n"
+            "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。"
+        )
 
     if body:
         lines.append(f"\n⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")
