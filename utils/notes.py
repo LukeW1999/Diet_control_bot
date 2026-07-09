@@ -15,32 +15,8 @@ CATEGORY_ICONS = {
 def save_note(entry_date: date, category: str, content: str, summary: str = "") -> Path:
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
     filepath = NOTES_DIR / f"{entry_date.isoformat()}.md"
-
-    label = CATEGORY_ICONS.get(category, "📝 其他")
-
-    # Read existing content
     existing = filepath.read_text(encoding="utf-8") if filepath.exists() else f"# {entry_date}\n"
-
-    # Check if this category section already exists
-    section_header = f"## {label}"
-    if section_header in existing:
-        # Append bullet under existing section
-        lines = existing.rstrip().split("\n")
-        insert_idx = len(lines)
-        for i, line in enumerate(lines):
-            if line.startswith(section_header):
-                # Find end of this section (next ## or end of file)
-                for j in range(i + 1, len(lines)):
-                    if lines[j].startswith("## "):
-                        insert_idx = j
-                        break
-                break
-        lines.insert(insert_idx, f"- {content}")
-        new_content = "\n".join(lines) + "\n"
-    else:
-        # Add new section
-        new_content = existing.rstrip() + f"\n\n## {label}\n- {content}\n"
-
+    new_content = existing.rstrip() + f"\n- {content}\n"
     filepath.write_text(new_content, encoding="utf-8")
     return filepath
 

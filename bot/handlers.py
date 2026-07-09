@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -11,15 +11,123 @@ from telegram.ext import ContextTypes
 from db import crud
 from llm import parsers, analyst
 from utils.image import save_and_encode
-from .keyboards import main_menu
+from utils.media_store import save_image as _media_save_image, save_document as _media_save_doc
+from .keyboards import main_menu, mode_menu, MODE_LABELS
 
 logger = logging.getLogger(__name__)
+
+_chat_mode: str = "auto"  # "auto" | "coach" | "psychologist"
+
+_CONV_LOG = os.path.join(os.path.dirname(__file__), "..", "data", "conversation_log.jsonl")
+_DEBUG_IMAGE = os.path.join(os.path.dirname(__file__), "..", "data", "images", "debug_last.jpg")
+_MODEL_TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "model_test")
+
+# When True, incoming photos are saved raw (no LLM parsing) for model benchmarking.
+_test_upload_mode: bool = False
+
+# When True, the next photo is parsed as an English nutrition label (one-shot).
+_nutrition_mode: bool = False
+
+# After a label is parsed, holds its per-100g/per-pack data awaiting a gram amount.
+_pending_nutrition: dict = {}
+
+
+def _log_event(event: dict) -> None:
+    event["ts"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        with open(_CONV_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 # Album (multi-photo) state: media_group_id -> {images, update, wait_msg}
 _pending_albums: dict = {}
 _background_tasks: set = set()  # keep task references to prevent GC
 _conversation_history: list[dict] = []  # last N turns for multi-turn context
 _MAX_HISTORY_TURNS = 8  # keep 8 exchanges (16 messages)
+
+_WORKOUT_KEYWORDS = [
+    "深蹲", "卧推", "硬拉", "引体", "哑铃", "杠铃", "训练", "练了",
+    "高位下拉", "划船", "推举", "飞鸟", "弯举", "臂屈伸", "夹胸",
+    "腿举", "腿屈伸", "腿弯举", "臀推", "保加利亚", "罗马尼亚",
+    "坐姿", "站姿", "器械", "绳索", "史密斯",
+    "跑步", "跑步机", "椭圆机", "跳绳", "踏步",
+    "rpe", "RPE", "rm", "RM",
+    "kg*", "kg×", "*8", "*10", "*12", "*6", "*5", "*4", "*3",
+]
+
+_CLOSING_SIGNALS = frozenset([
+    "好了", "好的谢谢", "谢谢", "感谢", "再见", "拜拜", "明白了",
+    "没事了", "就这样", "不说了", "先这样", "先聊到这",
+])
+
+_psych_session: dict = {
+    "active": False,
+    "turns": [],
+    "bot": None,
+    "chat_id": None,
+    "_timer": None,
+}
+
+
+def _cancel_psych_timer() -> None:
+    t = _psych_session.get("_timer")
+    if t and not t.done():
+        t.cancel()
+    _psych_session["_timer"] = None
+
+
+def _schedule_psych_save(bot, chat_id: str, delay: int = 600) -> None:
+    _cancel_psych_timer()
+
+    async def _timeout():
+        await asyncio.sleep(delay)
+        await _close_psych_session(notify=True)
+
+    task = asyncio.create_task(_timeout())
+    _psych_session["_timer"] = task
+    _psych_session["bot"] = bot
+    _psych_session["chat_id"] = chat_id
+
+
+async def _close_psych_session(notify: bool = False) -> None:
+    _cancel_psych_timer()
+    turns = list(_psych_session["turns"])
+    bot = _psych_session["bot"]
+    chat_id = _psych_session["chat_id"]
+    _psych_session.update({"active": False, "turns": [], "bot": None, "chat_id": None, "_timer": None})
+
+    if not turns:
+        return
+
+    try:
+        diary_data = await analyst.generate_diary_from_conversation(turns)
+        if diary_data and diary_data.get("content"):
+            from db.crud import save_diary
+            from utils.psych_memory import load_psych_memory, save_psych_memory
+            rec = save_diary(
+                entry_date=date.today(),
+                content=diary_data["content"],
+                mood=diary_data.get("mood"),
+                mood_score=diary_data.get("mood_score"),
+            )
+            memory = load_psych_memory()
+
+            async def _upd():
+                new_mem = await analyst.update_psych_memory(memory, diary_data["content"], diary_data.get("mood", ""))
+                if new_mem:
+                    save_psych_memory(new_mem)
+
+            t = asyncio.create_task(_upd())
+            _background_tasks.add(t)
+            t.add_done_callback(_background_tasks.discard)
+
+            if notify and bot and chat_id:
+                mood_str = f"（心情：{rec.mood}）" if rec.mood else ""
+                await bot.send_message(chat_id=chat_id, text=f"📔 已记录今天的对话{mood_str}")
+            _log_event({"type": "diary_from_convo", "turns": len(turns), "mood": diary_data.get("mood")})
+    except Exception:
+        logger.exception("Error saving psych session")
 
 
 def _append_history(user_text: str, assistant_text: str) -> None:
@@ -29,6 +137,45 @@ def _append_history(user_text: str, assistant_text: str) -> None:
     max_msgs = _MAX_HISTORY_TURNS * 2
     if len(_conversation_history) > max_msgs:
         del _conversation_history[:-max_msgs]
+
+
+async def cmd_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    global _chat_mode
+    if not _allowed(update):
+        return
+    arg = (ctx.args[0] if ctx.args else "").strip()
+    mapping = {"教练": "coach", "coach": "coach", "聊天": "chat", "chat": "chat", "自动": "auto", "auto": "auto"}
+    if arg in mapping:
+        _chat_mode = mapping[arg]
+        label = MODE_LABELS[_chat_mode]
+        await update.message.reply_text(f"已切换到 {label} 模式", reply_markup=mode_menu(_chat_mode))
+    else:
+        label = MODE_LABELS[_chat_mode]
+        await update.message.reply_text(
+            f"当前模式：{label}\n\n用法：/mode 教练 | /mode 聊天 | /mode 自动",
+            reply_markup=mode_menu(_chat_mode),
+        )
+
+
+async def cmd_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Model-benchmark upload entry. Button-driven (方案A style)."""
+    if not _allowed(update):
+        return
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧪 开始上传营养表照片", callback_data="test_start")],
+        [InlineKeyboardButton("✅ 结束测试", callback_data="test_stop")],
+    ])
+    state = "开启中" if _test_upload_mode else "关闭"
+    await update.message.reply_text(
+        "🧪 模型测试上传\n\n"
+        f"当前状态：{state}\n\n"
+        "点「开始上传」后，你发的图片会**只保存、不解析**，\n"
+        "我用它对比不同 Qwen 模型读营养表的效果。\n"
+        "测完点「结束测试」恢复正常（薄荷截图自动记录）。",
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
 
 
 def _allowed(update: Update) -> bool:
@@ -297,7 +444,61 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     image_bytes = bytes(await file.download_as_bytearray())
     b64 = base64.b64encode(image_bytes).decode()
 
+    # Nutrition-label mode (one-shot): parse English label via qwen3.7-plus + Python validation.
+    global _nutrition_mode
+    if _nutrition_mode:
+        _nutrition_mode = False  # one-shot
+        wait_msg = await update.message.reply_text("🥗 正在解析营养表...")
+        try:
+            from llm.nutrition import parse_nutrition_label, format_reply
+            result = await parse_nutrition_label(b64, column="pack")
+            await wait_msg.edit_text(format_reply(result))
+            # remember it so the next text (a gram amount) can be scaled
+            _pending_nutrition.clear()
+            _pending_nutrition.update({
+                "canon": result.get("table", {}),
+                "perpack": result.get("healthkit", {}),
+            })
+            _log_event({"type": "nutrition_label", "healthkit": result.get("healthkit"),
+                        "warnings": result.get("warnings")})
+        except Exception as e:
+            logger.exception("nutrition parse failed")
+            await wait_msg.edit_text(f"解析失败：{e}")
+        return
+
+    # Model-benchmark mode: save raw, skip all parsing.
+    if _test_upload_mode:
+        os.makedirs(_MODEL_TEST_DIR, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        n = len([f for f in os.listdir(_MODEL_TEST_DIR) if f.endswith((".jpg", ".jpeg", ".png"))]) + 1
+        fname = f"test{n:02d}_{stamp}.jpg"
+        with open(os.path.join(_MODEL_TEST_DIR, fname), "wb") as _f:
+            _f.write(image_bytes)
+        await update.message.reply_text(
+            f"🧪 已保存：{fname}（{len(image_bytes)//1024} KB）\n"
+            "再发下一张，或点 /test 里的「结束测试」。"
+        )
+        logger.info("Model-test image saved: %s", fname)
+        return
+
     media_group_id = update.message.media_group_id
+
+    # Always persist received images for debugging
+    try:
+        if media_group_id:
+            idx = len(_pending_albums.get(media_group_id, {}).get("images", [])) + 1
+            if idx == 1:  # clear old album debug files on new album
+                import glob
+                for old in glob.glob(_DEBUG_IMAGE.replace("debug_last.jpg", "debug_album_*.jpg")):
+                    os.remove(old)
+            debug_path = _DEBUG_IMAGE.replace("debug_last.jpg", f"debug_album_{idx}.jpg")
+        else:
+            debug_path = _DEBUG_IMAGE
+        with open(debug_path, "wb") as _f:
+            _f.write(image_bytes)
+        logger.info("Saved debug image [%s]: %d bytes", debug_path, len(image_bytes))
+    except Exception as _e:
+        logger.warning("Could not save debug image: %s", _e)
 
     if media_group_id:
         # Album: collect all photos then process together
@@ -305,6 +506,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             wait_msg = await update.message.reply_text("正在收集图片...")
             _pending_albums[media_group_id] = {
                 "images": [b64],
+                "raw": [image_bytes],
                 "update": update,
                 "ctx": ctx,
                 "wait_msg": wait_msg,
@@ -314,6 +516,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             task.add_done_callback(_background_tasks.discard)
         else:
             _pending_albums[media_group_id]["images"].append(b64)
+            _pending_albums[media_group_id].setdefault("raw", []).append(image_bytes)
     else:
         wait_msg = await update.message.reply_text("正在分析图片，请稍等...")
         await _process_single_photo(b64, image_bytes, update, ctx, wait_msg)
@@ -352,10 +555,20 @@ async def _process_album_delayed(media_group_id: str) -> None:
         else:
             reply = f"相册目前仅支持身体成分报告（识别为 {image_type}）。"
 
+        # Save each raw image to media store for Hermes
+        for raw in entry.get("raw", []):
+            try:
+                _media_save_image(raw, image_type)
+            except Exception:
+                pass
+
         await wait_msg.edit_text(reply, parse_mode="Markdown")
+        _log_event({"type": f"photo_album_{image_type}", "n_images": len(images), "response": reply})
     except Exception as e:
         logger.exception("Album processing error")
-        await wait_msg.edit_text(f"解析失败：{e}\n\n请重新发图或手动输入数据。")
+        err = f"解析失败：{e}"
+        await wait_msg.edit_text(err + "\n\n请重新发图或手动输入数据。")
+        _log_event({"type": "photo_album_error", "error": str(e)})
 
 
 async def _process_single_photo(b64: str, image_bytes: bytes, update: Update,
@@ -363,6 +576,12 @@ async def _process_single_photo(b64: str, image_bytes: bytes, update: Update,
     try:
         image_type = await parsers.classify_image(b64)
         today_str = str(date.today())
+
+        # Save to media store for Hermes (timestamped copy)
+        try:
+            _media_save_image(image_bytes, image_type)
+        except Exception:
+            pass
 
         if image_type == "diet":
             filepath, enc = save_and_encode(image_bytes, "diet")
@@ -395,10 +614,13 @@ async def _process_single_photo(b64: str, image_bytes: bytes, update: Update,
             reply = "这张图片我识别不出来，请发薄荷饮食截图或体成分报告截图。"
 
         await wait_msg.edit_text(reply, parse_mode="Markdown")
+        _log_event({"type": f"photo_{image_type}", "response": reply})
 
     except Exception as e:
         logger.exception("Error handling photo")
-        await wait_msg.edit_text(f"解析失败：{e}\n\n请重新发图或手动输入数据。")
+        err = f"解析失败：{e}"
+        await wait_msg.edit_text(err + "\n\n请重新发图或手动输入数据。")
+        _log_event({"type": "photo_error", "error": str(e)})
 
 
 # ── Text handler ───────────────────────────────────────────────────────────────
@@ -409,40 +631,123 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(f"Chat ID: {update.effective_chat.id}")
 
     text = update.message.text.strip()
+    logger.info("[MSG] mode=%s text=%s", _chat_mode, text)
+
+    # ── 营养表：解析后等待用户回复克数 ──────────────────────────────────────
+    if _pending_nutrition.get("canon"):
+        from llm.nutrition import scale_to_grams, format_scaled, format_scaled_pack
+        if text in ("整份", "整包", "一份", "全部", "pack", "whole"):
+            perpack = _pending_nutrition.get("perpack", {})
+            _pending_nutrition.clear()
+            await update.message.reply_text(format_scaled_pack(perpack))
+            return
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(?:g|克|G|克重)?\s*$", text)
+        if m:
+            grams = float(m.group(1))
+            canon = _pending_nutrition["canon"]
+            _pending_nutrition.clear()
+            scaled = scale_to_grams(canon, grams)
+            await update.message.reply_text(format_scaled(scaled))
+            _log_event({"type": "nutrition_scaled", "grams": grams, "healthkit": scaled})
+            return
+        # anything else cancels the pending flow and falls through to normal handling
+        _pending_nutrition.clear()
+
+    # ── 固定路由：教练/聊天模式直接跳过所有分类 API ──────────────────────────
+    if _chat_mode == "coach":
+        wait = await update.message.reply_text("🏋️ 查询中...")
+        ctx_data = _build_context()
+        answer = await analyst.answer_question(text, ctx_data, history=list(_conversation_history))
+        await wait.edit_text(answer)
+        _append_history(text, answer)
+        _log_event({"type": "coach", "mode": "manual", "text": text, "response": answer})
+        return
+
+    if _chat_mode == "chat":
+        wait = await update.message.reply_text("💬 思考中...")
+        from utils.psych_memory import load_psych_memory
+        memory = load_psych_memory()
+        answer = await analyst.answer_as_psychologist(text, memory, history=list(_conversation_history))
+        await wait.edit_text(answer)
+        _append_history(text, answer)
+        _log_event({"type": "psychologist", "mode": "manual", "text": text, "response": answer})
+        return
+
+    # ── 自动模式：保留原有分类逻辑 ────────────────────────────────────────────
+
+    # Continue an active psychologist session
+    if _psych_session["active"]:
+        _cancel_psych_timer()
+        is_closing = any(sig in text for sig in _CLOSING_SIGNALS)
+        from utils.psych_memory import load_psych_memory
+        memory = load_psych_memory()
+        answer = await analyst.answer_as_psychologist(text, memory, history=list(_conversation_history))
+        await update.message.reply_text(answer)
+        _psych_session["turns"].append({"user": text, "bot": answer})
+        _append_history(text, answer)
+        _log_event({"type": "psychologist_session", "text": text, "response": answer})
+        if is_closing:
+            await _close_psych_session(notify=False)
+        else:
+            _schedule_psych_save(ctx.bot, update.effective_chat.id)
+        return
+
+    # Quick weight entry: "今天体重 91.2" or "体重 91.2"
+    weight_match = re.search(r"体重\s*([\d.]+)", text)
+    if weight_match:
+        weight = float(weight_match.group(1))
+        crud.quick_weight_entry(date.today(), weight)
+        await update.message.reply_text(f"✅ 体重已记录：{weight} kg（{date.today()}）")
+        return
+
+    # Workout detection — before LLM calls so keywords always win
+    if any(kw in text for kw in _WORKOUT_KEYWORDS):
+        wait = await update.message.reply_text("正在解析训练记录...")
+        try:
+            data, raw = await parsers.parse_workout_text(text)
+            rec = crud.save_workout(data)
+            exercises = json.loads(rec.exercises or "[]")
+            ex_lines = []
+            for ex in exercises:
+                sets_str = ", ".join(
+                    f"{s.get('weight')}kg×{s.get('reps')}" + (f"@RPE{s['rpe']}" if s.get("rpe") else "")
+                    for s in ex.get("sets", [])
+                )
+                ex_lines.append(f"  • {ex['exercise']}：{sets_str}")
+            reply = f"✅ {rec.date} 训练已记录\n\n💪 动作：\n" + "\n".join(ex_lines)
+            if rec.notes:
+                reply += f"\n\n📝 {rec.notes}"
+            await wait.edit_text(reply)
+        except Exception as e:
+            logger.exception("Workout parse error")
+            await wait.edit_text(f"解析训练记录失败：{e}")
+        return
+
+    # Diary / mood entry — checked BEFORE notes so emotional content starts a session
+    diary = await analyst.detect_diary(text)
+    if diary:
+        logger.info("[ROUTE] diary → starting psych session, mood=%s", diary.get("mood"))
+        _psych_session["active"] = True
+        _psych_session["turns"] = []
+        from utils.psych_memory import load_psych_memory
+        memory = load_psych_memory()
+        answer = await analyst.answer_as_psychologist(text, memory, history=[])
+        await update.message.reply_text(answer)
+        _psych_session["turns"].append({"user": text, "bot": answer})
+        _append_history(text, answer)
+        _log_event({"type": "psychologist_session_start", "trigger": "diary", "text": text})
+        _schedule_psych_save(ctx.bot, update.effective_chat.id)
+        return
 
     # Note detection
     note = await analyst.classify_note(text)
     if note:
-        from utils.notes import save_note, CATEGORY_ICONS
+        logger.info("[ROUTE] note → category=%s", note.get("category"))
+        _log_event({"type": "note", "text": text, "category": note.get("category"), "summary": note.get("summary")})
+        from utils.notes import save_note
         save_note(date.today(), note.get("category", "other"), text)
-        label = CATEGORY_ICONS.get(note.get("category", "other"), "📝 其他")
         summary = note.get("summary", "")
-        await update.message.reply_text(f"📌 已记录到「{label}」\n{summary}")
-        return
-
-    # Diary / mood entry detection
-    diary = await analyst.detect_diary(text)
-    if diary:
-        from db.crud import save_diary
-        rec = save_diary(
-            entry_date=date.today(),
-            content=diary.get("content", text),
-            mood=diary.get("mood"),
-            mood_score=diary.get("mood_score"),
-        )
-        mood_str = f"心情：{rec.mood}（{rec.mood_score}/5）" if rec.mood else ""
-        from utils.psych_memory import load_psych_memory, save_psych_memory
-        memory = load_psych_memory()
-        response = await analyst.generate_diary_response(diary.get("content", text), diary.get("mood", ""), memory)
-        await update.message.reply_text(f"📔 {rec.date} {mood_str}\n\n{response}")
-        _append_history(text, response)
-        async def _update_memory():
-            new_mem = await analyst.update_psych_memory(memory, diary.get("content", text), diary.get("mood", ""))
-            if new_mem:
-                save_psych_memory(new_mem)
-        task = asyncio.create_task(_update_memory())
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        await update.message.reply_text(f"📌 已记录{('：' + summary) if summary else ''}")
         return
 
     # Correction intent: "内脏脂肪应该是13" / "体脂率错了，是29.2"
@@ -469,48 +774,21 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("找不到对应记录，无法修正。")
         return
 
-    # Quick weight entry: "今天体重 91.2" or "体重 91.2"
-    weight_match = re.search(r"体重\s*([\d.]+)", text)
-    if weight_match:
-        weight = float(weight_match.group(1))
-        crud.quick_weight_entry(date.today(), weight)
-        await update.message.reply_text(f"✅ 体重已记录：{weight} kg（{date.today()}）")
-        return
-
-    # Workout detection
-    workout_keywords = ["深蹲", "卧推", "硬拉", "引体", "哑铃", "杠铃", "训练", "练了", "组", "rpe", "RPE"]
-    if any(kw in text.lower() for kw in workout_keywords):
-        wait = await update.message.reply_text("正在解析训练记录...")
-        try:
-            data, raw = await parsers.parse_workout_text(text)
-            rec = crud.save_workout(data)
-            exercises = json.loads(rec.exercises or "[]")
-            ex_lines = []
-            for ex in exercises:
-                sets_str = ", ".join(
-                    f"{s.get('weight')}kg×{s.get('reps')}" + (f"@RPE{s['rpe']}" if s.get("rpe") else "")
-                    for s in ex.get("sets", [])
-                )
-                ex_lines.append(f"  • {ex['exercise']}：{sets_str}")
-            reply = f"✅ {rec.date} 训练已记录\n\n💪 动作：\n" + "\n".join(ex_lines)
-            if rec.notes:
-                reply += f"\n\n📝 {rec.notes}"
-            await wait.edit_text(reply)
-        except Exception as e:
-            logger.exception("Workout parse error")
-            await wait.edit_text(f"解析训练记录失败：{e}")
-        return
-
-    # Route to coach or psychologist
+    # Auto-route to coach or psychologist
     role = await analyst.route_message(text)
+    logger.info("[ROUTE] → %s | text=%.80s", role, text)
 
     if role == "psychologist":
-        wait = await update.message.reply_text("思考中...")
+        _psych_session["active"] = True
+        _psych_session["turns"] = []
         from utils.psych_memory import load_psych_memory
         memory = load_psych_memory()
         answer = await analyst.answer_as_psychologist(text, memory, history=list(_conversation_history))
-        await wait.edit_text(answer)
+        await update.message.reply_text(answer)
+        _psych_session["turns"].append({"user": text, "bot": answer})
         _append_history(text, answer)
+        _log_event({"type": "psychologist_session_start", "trigger": "route", "text": text})
+        _schedule_psych_save(ctx.bot, update.effective_chat.id)
         return
 
     # Coach: health/diet/workout queries
@@ -519,14 +797,112 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     answer = await analyst.answer_question(text, ctx_data, history=list(_conversation_history))
     await wait.edit_text(answer)
     _append_history(text, answer)
+    _log_event({"type": "coach", "text": text, "response": answer})
+
+
+# ── Document handler ──────────────────────────────────────────────────────────
+
+_SUPPORTED_DOC_EXTS = {".md", ".txt", ".docx"}
+
+async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _allowed(update):
+        return
+    doc = update.message.document
+    filename = doc.file_name or "document"
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext not in _SUPPORTED_DOC_EXTS:
+        await update.message.reply_text(
+            f"暂不支持 {ext or '未知'} 格式，支持：.md / .txt / .docx"
+        )
+        return
+
+    wait = await update.message.reply_text("📄 正在读取文档...")
+    try:
+        file = await ctx.bot.get_file(doc.file_id)
+        file_bytes = bytes(await file.download_as_bytearray())
+
+        # Save to media store (Hermes will read from here)
+        saved_path = _media_save_doc(file_bytes, filename)
+
+        # Extract text for preview and logging
+        if ext in (".md", ".txt"):
+            text_content = file_bytes.decode("utf-8", errors="replace")
+        else:  # .docx
+            import docx as _docx
+            import io as _io
+            doc_obj = _docx.Document(_io.BytesIO(file_bytes))
+            text_content = "\n".join(p.text for p in doc_obj.paragraphs if p.text.strip())
+
+        preview = text_content[:300]
+        _log_event({
+            "type": "document_received",
+            "filename": filename,
+            "saved_path": saved_path,
+            "size_bytes": len(file_bytes),
+            "preview": text_content[:200],
+        })
+
+        await wait.edit_text(
+            f"📄 已保存「{filename}」（{len(file_bytes)//1024 or 1} KB）\n"
+            f"Hermes 将在下次周期分析时读取此文档。\n\n"
+            f"内容预览：\n{preview}{'…' if len(text_content) > 300 else ''}"
+        )
+
+    except Exception as e:
+        logger.exception("Document handling error")
+        await wait.edit_text(f"读取文档失败：{e}")
 
 
 # ── Callback query (inline keyboard) ─────────────────────────────────────────
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    global _test_upload_mode, _nutrition_mode
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    if data == "nutrition_on":
+        _nutrition_mode = True
+        await query.edit_message_text(
+            "🥗 记营养表已就绪。\n发一张英文营养成分表照片给我，我解析成营养数据（每份 per pack）。"
+        )
+        return
+
+    if data.startswith("set_mode:"):
+        global _chat_mode
+        _chat_mode = data.split(":")[1]
+        label = MODE_LABELS[_chat_mode]
+        await query.edit_message_text(f"已切换到 {label} 模式", reply_markup=mode_menu(_chat_mode))
+        return
+
+    if data == "test_menu":
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🧪 开始上传营养表照片", callback_data="test_start")],
+            [InlineKeyboardButton("✅ 结束测试", callback_data="test_stop")],
+        ])
+        state = "开启中" if _test_upload_mode else "关闭"
+        await query.edit_message_text(
+            "🧪 模型测试上传\n\n"
+            f"当前状态：{state}\n\n"
+            "点「开始上传」后，你发的图片只保存、不解析，\n"
+            "我用它对比不同 Qwen 模型读营养表的效果。\n"
+            "测完点「结束测试」恢复正常记录。",
+            reply_markup=kb,
+        )
+        return
+
+    if data == "test_start":
+        _test_upload_mode = True
+        await query.edit_message_text(
+            "🧪 测试上传已开启。\n现在发营养表照片给我，只保存不解析。\n发完告诉我图里写了什么。"
+        )
+        return
+    if data == "test_stop":
+        _test_upload_mode = False
+        await query.edit_message_text("✅ 测试上传已关闭，恢复正常记录。")
+        return
 
     if data == "today":
         await query.edit_message_text(_build_today_summary(date.today()), parse_mode="Markdown")
@@ -726,13 +1102,16 @@ def _build_context() -> dict:
     )
     body_history = crud.get_body_compositions_range(today - timedelta(days=730), today)
 
+    diet_record_count = sum(1 for s in summaries if (s.total_calories_in or 0) > 0)
+
     ctx = {}
     if body:
         ctx["latest_body"] = {
             "date": str(body.date),
             "weight_kg": body.weight_kg,
             "body_fat_pct": body.body_fat_pct,
-            "muscle_mass_kg": body.muscle_mass_kg,
+            "skeletal_muscle_kg": body.skeletal_muscle_kg,
+            "fat_free_mass_kg": body.fat_free_mass_kg,
         }
     if body_history:
         ctx["body_history"] = [
@@ -741,11 +1120,10 @@ def _build_context() -> dict:
                 "weight_kg": r.weight_kg,
                 "body_fat_pct": r.body_fat_pct,
                 "skeletal_muscle_kg": r.skeletal_muscle_kg,
+                "fat_free_mass_kg": r.fat_free_mass_kg,
             }
             for r in body_history
         ]
-        # Pre-compute weight trend so LLM doesn't do the math
-        pass  # weight_trend now handled by stats_cache (utils/stats.py)
     if today_diet:
         ctx["today_diet"] = {
             "total_calories": today_diet.total_calories,
@@ -753,6 +1131,7 @@ def _build_context() -> dict:
         }
     if avg_deficit is not None:
         ctx["week_avg_deficit"] = avg_deficit
+        ctx["diet_record_count"] = diet_record_count
     return ctx
 
 
@@ -797,3 +1176,106 @@ def _parse_date(d) -> date:
     if not d or d == "today":
         return date.today()
     return date.fromisoformat(str(d)[:10])
+
+
+# --- /server : ESBMC-Inv cluster load (added for ops monitoring) ------------
+import subprocess as _subprocess
+
+_ESBMC_SERVERS = [
+    ("London (dev+LLM)", "8.211.242.246"),
+    ("node C (baseline 900s)", "8.208.52.173"),
+    ("node A (zero-reg)", "8.208.113.132"),
+]
+_ESBMC_PEM = "/root/.ssh/pair.pem"
+
+
+def _probe_esbmc_server(host: str) -> str:
+    cmd = [
+        "ssh", "-i", _ESBMC_PEM, "-o", "ConnectTimeout=8",
+        "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", f"root@{host}",
+        "cut -d' ' -f1-3 /proc/loadavg; "
+        "pgrep -xc esbmc 2>/dev/null || echo 0; "
+        "pgrep -fc 'run_esbmc_inv_batch|run_baseline_900' 2>/dev/null || echo 0; "
+        "free -m | awk '/Mem:/{print $7}'",
+    ]
+    try:
+        r = _subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        return "  🔴 OFF (关机/不可达)"
+    if r.returncode != 0:
+        return "  🔴 OFF (已关机省钱)"
+    p = (r.stdout.strip() + "\n\n\n\n").split("\n")
+    load, esbmc_n, batch_n, freem = p[0], p[1], p[2], p[3]
+    try:
+        load1 = float(load.split()[0])
+    except Exception:
+        load1 = 0.0
+    busy = load1 > 0.5 or esbmc_n not in ("0", "")
+    tag = "🟢 BUSY" if busy else "💤 IDLE — 可关机省钱"
+    return (f"  load: {load}  | esbmc: {esbmc_n}  batch: {batch_n}\n"
+            f"  free: {freem}MB  {tag}")
+
+
+async def cmd_server(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _allowed(update):
+        return
+    await update.message.reply_text("🔍 查询 ESBMC-Inv 集群负载...")
+    lines = []
+    for name, host in _ESBMC_SERVERS:
+        out = await asyncio.to_thread(_probe_esbmc_server, host)
+        lines.append(f"*{name}*  `{host}`\n{out}")
+    await update.message.reply_text("\n\n".join(lines), parse_mode="Markdown")
+
+
+# --- periodic idle watch: alert once per idle transition --------------------
+import os as _os
+
+_idle_alerted: dict = {}  # host -> True once we've alerted for this idle spell
+
+
+def _server_status(host: str):
+    """Return (busy: bool|None, text). None = unreachable (do not alert)."""
+    cmd = [
+        "ssh", "-i", _ESBMC_PEM, "-o", "ConnectTimeout=8",
+        "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", f"root@{host}",
+        "cut -d' ' -f1-3 /proc/loadavg; "
+        "pgrep -xc esbmc 2>/dev/null || echo 0; "
+        "pgrep -fc 'run_esbmc_inv_batch|run_baseline_900' 2>/dev/null || echo 0",
+    ]
+    try:
+        r = _subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception:
+        return (None, "unreachable")
+    if r.returncode != 0:
+        return (None, "unreachable")
+    p = (r.stdout.strip() + "\n\n\n").split("\n")
+    load, esbmc_n, batch_n = p[0], p[1], p[2]
+    try:
+        load1 = float(load.split()[0])
+    except Exception:
+        load1 = 0.0
+    busy = load1 > 0.5 or esbmc_n not in ("0", "")
+    return (busy, f"load {load} | esbmc {esbmc_n} batch {batch_n}")
+
+
+async def _server_watch(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = _os.getenv("ALLOWED_CHAT_ID", "")
+    if not chat:
+        return
+    for name, host in _ESBMC_SERVERS:
+        busy, text = await asyncio.to_thread(_server_status, host)
+        if busy is None:
+            continue
+        if not busy:
+            if not _idle_alerted.get(host):
+                _idle_alerted[host] = True
+                try:
+                    await ctx.bot.send_message(
+                        chat_id=int(chat),
+                        text=(f"💤 *{name}* `{host}` 空闲了（没在跑任务）。\n"
+                              f"{text}\n可以关机省钱。"),
+                        parse_mode="Markdown")
+                except Exception:
+                    pass
+        else:
+            _idle_alerted[host] = False

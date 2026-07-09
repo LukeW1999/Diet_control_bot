@@ -1,5 +1,11 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+MODE_LABELS = {
+    "auto":   "🤖 自动",
+    "coach":  "🏋️ 教练",
+    "chat":   "💬 聊天",
+}
+
 
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -12,4 +18,15 @@ def main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("训练记录", callback_data="workout"),
         ],
         [InlineKeyboardButton("生成周报", callback_data="report")],
+        [InlineKeyboardButton("🥗 记营养表", callback_data="nutrition_on")],
+        [InlineKeyboardButton("🧪 模型测试", callback_data="test_menu")],
     ])
+
+
+def mode_menu(current: str) -> InlineKeyboardMarkup:
+    def btn(mode: str) -> InlineKeyboardButton:
+        label = MODE_LABELS[mode]
+        if mode == current:
+            label = "✅ " + label
+        return InlineKeyboardButton(label, callback_data=f"set_mode:{mode}")
+    return InlineKeyboardMarkup([[btn("auto"), btn("coach"), btn("chat")]])

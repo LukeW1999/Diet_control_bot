@@ -2,18 +2,18 @@ import logging
 import os
 from datetime import date, timedelta
 
-from telegram import Bot
-
 from db import crud
+from wecom.client import send_text
 
 logger = logging.getLogger(__name__)
 
 
-async def _morning_check(bot: Bot, chat_id: str) -> None:
+async def _morning_check(user_id: str) -> None:
     from utils.weather import get_london_weather, format_weather
     from utils.quotes import get_random_quote
     from utils.hitokoto import fetch_hitokoto
     from llm.analyst import generate_morning_quote_commentary
+
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
     body = crud.get_latest_body_composition()
@@ -21,41 +21,21 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
 
     lines = ["早上好。☀️\n"]
 
-    # Weather
     try:
         weather = await get_london_weather()
         lines.append(format_weather(weather) + "\n")
     except Exception:
         pass
 
-    # Yesterday's data (HealthKit total, synced ~23:30 the night before)
     if diet:
-        # deficit comes from DailySummary — it already uses HealthKit resting energy
-        # (when synced) instead of a static BMR. Falls back to static if missing.
-        summ = crud.get_daily_summary(yesterday)
-        deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None \
-            else bmr - ((diet.total_calories or 0) - (diet.exercise_calories or 0))
+        net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
+        deficit = bmr - net
         protein_pct = int(diet.protein_g / diet.protein_goal_g * 100) if diet.protein_goal_g else 0
         lines += [
             "昨天数据：",
             f"🔥 热量摄入：{diet.total_calories:.0f} kcal（缺口 {deficit:.0f} kcal）",
-            f"🏃 运动消耗：{(diet.exercise_calories or 0):.0f} kcal",
-            f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）",
-            f"🍚 碳水：{(diet.carbs_g or 0):.0f}g | 🧈 脂肪：{(diet.fat_g or 0):.0f}g",
+            f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）\n",
         ]
-        # 30-day projection from stored daily deficits (consistent with /week, /stats)
-        summaries = crud.get_daily_summaries_range(yesterday - timedelta(days=29), yesterday)
-        tracked = [s for s in summaries if s.calorie_deficit is not None]
-        if tracked:
-            avg_daily_deficit = sum(s.calorie_deficit for s in tracked) / len(tracked)
-            monthly_fat_loss = avg_daily_deficit * 30 / 7700
-            lines += [
-                f"\n📅 近30天已记录 {len(tracked)} 天",
-                f"📉 日均缺口：{avg_daily_deficit:.0f} kcal",
-                f"📊 按此速度月减脂：{monthly_fat_loss:.2f} kg\n",
-            ]
-        else:
-            lines.append("")
     else:
         lines.append("昨天没有饮食记录。没有数据就没有进步——今天记录好。\n")
 
@@ -68,12 +48,11 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         f"• 热量控制在 {bmr - 500:.0f}–{bmr - 300:.0f} kcal",
     ]
 
-    # Daily quote from random book
     result = get_random_quote()
     if result:
         quote, source = result
         try:
-            commentary = await generate_morning_quote_commentary(quote, source)
+            commentary = await generate_morning_quote_commentary(quote)
             lines += [
                 "\n📖 今日金句",
                 f"「{quote}」",
@@ -83,7 +62,6 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         except Exception:
             lines += ["\n📖 今日金句", f"「{quote}」", f"——{source}"]
 
-    # Hitokoto random quote
     hitokoto = await fetch_hitokoto()
     if hitokoto:
         ht_text, ht_source = hitokoto
@@ -91,15 +69,14 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
 
     lines.append("\n今天状态怎么样？有什么想说的也可以发给我 📔")
 
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    send_text(user_id, "\n".join(lines))
 
 
-async def _evening_summary(bot: Bot, chat_id: str) -> None:
+async def _evening_summary(user_id: str) -> None:
     today = date.today()
     diet = crud.get_diet_record(today)
     bmr = crud.get_bmr()
 
-    # ── 过去30天（只统计有记录的天）──────────────────────────
     month_start = today - timedelta(days=29)
     month_records = crud.get_diet_records_range(month_start, today)
     tracked_days = len(month_records)
@@ -110,28 +87,22 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
             for r in month_records
         )
         avg_daily_deficit = month_deficit / tracked_days
-        monthly_projected_deficit = avg_daily_deficit * 30
-        monthly_fat_loss = monthly_projected_deficit / 7700
+        monthly_fat_loss = (avg_daily_deficit * 30) / 7700
     else:
         avg_daily_deficit = 0
         monthly_fat_loss = 0
 
-    # ── 今天没有记录 ──────────────────────────────────────────
     if not diet:
-        lines = [
-            "📸 今天还没有饮食记录\n",
-            "今天数据缺失，不计入统计。\n",
-        ]
+        lines = ["📸 今天还没有饮食记录\n", "今天数据缺失，不计入统计。\n"]
         if tracked_days > 0:
             lines += [
                 f"📅 过去30天已记录 {tracked_days} 天",
                 f"📉 日均热量缺口：{avg_daily_deficit:.0f} kcal",
                 f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
             ]
-        await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+        send_text(user_id, "\n".join(lines))
         return
 
-    # ── 今天有记录 ────────────────────────────────────────────
     net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
     today_deficit = bmr - net
     protein_pct = int(diet.protein_g / diet.protein_goal_g * 100) if diet.protein_goal_g else 0
@@ -152,37 +123,31 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
             f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
         ]
 
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    send_text(user_id, "\n".join(lines))
 
 
-async def _notes_reminder(bot: Bot, chat_id: str) -> None:
+async def _notes_reminder(user_id: str) -> None:
     from utils.notes import get_today_notes
     today_notes = get_today_notes(date.today())
     if today_notes:
-        await bot.send_message(
-            chat_id=chat_id,
-            text="📝 下午好！今天已经有笔记了，还有什么要补充吗？",
-        )
+        send_text(user_id, "📝 下午好！今天已经有笔记了，还有什么要补充吗？")
     else:
-        await bot.send_message(
-            chat_id=chat_id,
-            text="📝 下午好！记录一下今天的工作或学习内容吧，发给我就行。",
-        )
+        send_text(user_id, "📝 下午好！记录一下今天的工作或学习内容吧，发给我就行。")
 
 
-async def _weekly_notes_summary(bot: Bot, chat_id: str) -> None:
+async def _weekly_notes_summary(user_id: str) -> None:
     from utils.notes import get_week_notes
     from llm.analyst import generate_weekly_notes_summary
     today = date.today()
     start = today - timedelta(days=6)
     notes_text = get_week_notes(start, today)
-    await bot.send_message(chat_id=chat_id, text="📚 正在整理本周笔记...")
+    send_text(user_id, "📚 正在整理本周笔记...")
     summary = await generate_weekly_notes_summary(notes_text)
-    await bot.send_message(chat_id=chat_id, text=f"📚 本周笔记整理\n\n{summary}")
+    send_text(user_id, f"📚 本周笔记整理\n\n{summary}")
 
 
-async def _weekly_report(bot: Bot, chat_id: str) -> None:
+async def _weekly_report(user_id: str) -> None:
     from bot.handlers import _generate_report
-    await bot.send_message(chat_id=chat_id, text="正在生成周报...")
+    send_text(user_id, "正在生成周报...")
     report = await _generate_report()
-    await bot.send_message(chat_id=chat_id, text=report)
+    send_text(user_id, report)

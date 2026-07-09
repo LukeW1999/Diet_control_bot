@@ -4,12 +4,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from telegram import BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from bot.handlers import (
     cmd_start, cmd_today, cmd_week, cmd_body, cmd_workout, cmd_report,
-    cmd_profile, cmd_update, cmd_stats,
-    handle_photo, handle_text, handle_callback,
+    cmd_profile, cmd_update, cmd_stats, cmd_mode, cmd_server, cmd_test, _server_watch,
+    handle_photo, handle_text, handle_document, handle_callback,
 )
+
+# Commands shown when you type "/" or tap the menu button — no more typing.
+_COMMANDS = [
+    BotCommand("start", "主菜单 / 打开按钮"),
+    BotCommand("today", "今日数据"),
+    BotCommand("week", "本周汇总"),
+    BotCommand("body", "身体成分"),
+    BotCommand("workout", "训练记录"),
+    BotCommand("stats", "体重统计"),
+    BotCommand("profile", "个人资料 / BMR"),
+    BotCommand("report", "生成周报"),
+    BotCommand("mode", "切换对话模式"),
+    BotCommand("test", "模型测试上传"),
+]
+
+
+async def _post_init(app: Application) -> None:
+    await app.bot.set_my_commands(_COMMANDS)
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -25,7 +44,7 @@ def main() -> None:
 
     chat_id = os.getenv("ALLOWED_CHAT_ID", "")
 
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).post_init(_post_init).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("today", cmd_today))
@@ -36,9 +55,14 @@ def main() -> None:
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("mode", cmd_mode))
+    app.add_handler(CommandHandler("server", cmd_server))
+    app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.job_queue.run_repeating(_server_watch, interval=1800, first=120)
 
 
     logger.info("Bot starting...")
