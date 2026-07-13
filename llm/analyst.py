@@ -432,10 +432,10 @@ def _format_weekly_data(data: dict) -> str:
     if diets:
         lines.append("== 饮食记录 ==")
         for d in diets:
-            deficit = d.get("calorie_deficit", 0)
+            deficit = d.get("calorie_deficit") or 0
             lines.append(
-                f"{d['date']}: 摄入{d.get('total_calories', 0):.0f}kcal, "
-                f"蛋白质{d.get('protein_g', 0):.0f}g/{d.get('protein_goal_g', 0):.0f}g, "
+                f"{d['date']}: 摄入{(d.get('total_calories') or 0):.0f}kcal, "
+                f"蛋白质{(d.get('protein_g') or 0):.0f}g/{(d.get('protein_goal_g') or 0):.0f}g, "
                 f"热量缺口{deficit:.0f}kcal"
             )
 

@@ -35,12 +35,17 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         summ = crud.get_daily_summary(yesterday)
         deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None \
             else bmr - ((diet.total_calories or 0) - (diet.exercise_calories or 0))
-        protein_pct = int(diet.protein_g / diet.protein_goal_g * 100) if diet.protein_goal_g else 0
+        # protein goal lives on DailySummary (weight×1.8). The diet record itself
+        # has no protein_goal_g when written from HealthKit, so never format it directly.
+        protein_g = diet.protein_g or 0
+        protein_goal_g = (summ.protein_goal_g if summ and summ.protein_goal_g
+                          else (diet.protein_goal_g or 0))
+        protein_pct = int(protein_g / protein_goal_g * 100) if protein_goal_g else 0
         lines += [
             "昨天数据：",
-            f"🔥 热量摄入：{diet.total_calories:.0f} kcal（缺口 {deficit:.0f} kcal）",
+            f"🔥 热量摄入：{(diet.total_calories or 0):.0f} kcal（缺口 {deficit:.0f} kcal）",
             f"🏃 运动消耗：{(diet.exercise_calories or 0):.0f} kcal",
-            f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）",
+            f"🥩 蛋白质：{protein_g:.0f}g / {protein_goal_g:.0f}g（{protein_pct}%）",
             f"🍚 碳水：{(diet.carbs_g or 0):.0f}g | 🧈 脂肪：{(diet.fat_g or 0):.0f}g",
         ]
         # 30-day projection from stored daily deficits (consistent with /week, /stats)
@@ -134,15 +139,19 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
     # ── 今天有记录 ────────────────────────────────────────────
     net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
     today_deficit = bmr - net
-    protein_pct = int(diet.protein_g / diet.protein_goal_g * 100) if diet.protein_goal_g else 0
+    summ = crud.get_daily_summary(today)
+    protein_g = diet.protein_g or 0
+    protein_goal_g = (summ.protein_goal_g if summ and summ.protein_goal_g
+                      else (diet.protein_goal_g or 0))
+    protein_pct = int(protein_g / protein_goal_g * 100) if protein_goal_g else 0
     protein_icon = "✅ 超额完成！" if protein_pct >= 100 else ("👍 接近目标" if protein_pct >= 85 else "")
 
     lines = [
         "今天收工，来对账。🌙\n",
         "📊 今日数据",
-        f"🔥 热量：{diet.total_calories:.0f} kcal（缺口 {today_deficit:.0f} kcal）",
-        f"🥩 蛋白质：{diet.protein_g:.0f}g / {diet.protein_goal_g:.0f}g（{protein_pct}%）{protein_icon}",
-        f"🍚 碳水：{diet.carbs_g:.0f}g | 🧈 脂肪：{diet.fat_g:.0f}g",
+        f"🔥 热量：{(diet.total_calories or 0):.0f} kcal（缺口 {today_deficit:.0f} kcal）",
+        f"🥩 蛋白质：{protein_g:.0f}g / {protein_goal_g:.0f}g（{protein_pct}%）{protein_icon}",
+        f"🍚 碳水：{(diet.carbs_g or 0):.0f}g | 🧈 脂肪：{(diet.fat_g or 0):.0f}g",
     ]
 
     if tracked_days > 0:

@@ -329,6 +329,17 @@ async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def cmd_nutrition(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Arm nutrition-label mode from the / menu, then wait for a photo."""
+    if not _allowed(update):
+        return
+    global _nutrition_mode
+    _nutrition_mode = True
+    await update.message.reply_text(
+        "🥗 记营养表已就绪。\n拍一张英文营养成分表照片发给我，我解析成营养数据（每份 per pack）。"
+    )
+
+
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
@@ -675,6 +686,18 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
 # ── Callback query (inline keyboard) ─────────────────────────────────────────
 
+async def _menu_edit(query, text, parse_mode=None) -> None:
+    """Refresh the menu bubble in place: edit the same message and re-attach the
+    menu so tapping today/week/… repeatedly updates one bubble instead of piling
+    up new messages. Swallows Telegram's 'message is not modified' (same content)."""
+    from telegram.error import BadRequest
+    try:
+        await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=main_menu())
+    except BadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     global _nutrition_mode
     query = update.callback_query
@@ -696,15 +719,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "today":
-        await query.edit_message_text(_build_today_summary(date.today()), parse_mode="Markdown")
+        await _menu_edit(query, _build_today_summary(date.today()), parse_mode="Markdown")
     elif data == "week":
-        fake_update = update
-        # Reuse cmd_week logic
         today = date.today()
         start = today - timedelta(days=6)
         records = crud.get_daily_summaries_range(start, today)
         if not records:
-            await query.edit_message_text("本周还没有数据。")
+            await _menu_edit(query, "本周还没有数据。")
         else:
             total_deficit = sum(r.calorie_deficit or 0 for r in records)
             avg_deficit = total_deficit / len(records)
@@ -718,29 +739,29 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 f"📈 日均缺口：{avg_deficit:.0f} kcal\n"
                 f"🥩 蛋白质达标天数：{protein_days}/{len(records)} 天"
             )
-            await query.edit_message_text(text, parse_mode="Markdown")
+            await _menu_edit(query, text, parse_mode="Markdown")
     elif data == "body":
         rec = crud.get_latest_body_composition()
         if not rec:
-            await query.edit_message_text("还没有身体成分记录。")
+            await _menu_edit(query, "还没有身体成分记录。")
         else:
-            await query.edit_message_text(_format_body_reply(rec, None), parse_mode="Markdown")
+            await _menu_edit(query, _format_body_reply(rec, None), parse_mode="Markdown")
     elif data == "workout":
         today = date.today()
         workouts = crud.get_workouts_range(today - timedelta(days=6), today)
         if not workouts:
-            await query.edit_message_text("本周还没有训练记录。")
+            await _menu_edit(query, "本周还没有训练记录。")
         else:
             lines = [f"💪 本周训练（{len(workouts)} 次）\n"]
             for w in workouts:
                 exercises = json.loads(w.exercises or "[]")
                 ex_names = "、".join(e["exercise"] for e in exercises[:3])
                 lines.append(f"• {w.date} — {ex_names or w.workout_type}")
-            await query.edit_message_text("\n".join(lines))
+            await _menu_edit(query, "\n".join(lines))
     elif data == "report":
         await query.edit_message_text("正在生成周报...")
         report = await _generate_report()
-        await query.edit_message_text(report)
+        await _menu_edit(query, report)
 
 
 # ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -822,11 +843,14 @@ def _build_today_summary(today: date) -> str:
         bmr = summ.bmr if summ and summ.bmr else crud.get_bmr()
         net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
         deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None else bmr - net
+        # protein goal lives on DailySummary; HK-written diet records have none.
+        protein_goal_g = (summ.protein_goal_g if summ and summ.protein_goal_g
+                          else (diet.protein_goal_g or 0))
         lines += [
-            f"🔥 摄入：{diet.total_calories:.0f} kcal | 运动：{diet.exercise_calories:.0f} kcal",
+            f"🔥 摄入：{(diet.total_calories or 0):.0f} kcal | 运动：{(diet.exercise_calories or 0):.0f} kcal",
             f"📉 热量缺口：{deficit:.0f} kcal",
-            f"🥩 蛋白质：{diet.protein_g:.0f}g / {(diet.protein_goal_g or 0):.0f}g",
-            f"🍚 碳水：{diet.carbs_g:.0f}g | 🧈 脂肪：{diet.fat_g:.0f}g",
+            f"🥩 蛋白质：{(diet.protein_g or 0):.0f}g / {protein_goal_g:.0f}g",
+            f"🍚 碳水：{(diet.carbs_g or 0):.0f}g | 🧈 脂肪：{(diet.fat_g or 0):.0f}g",
         ]
     else:
         lines.append(

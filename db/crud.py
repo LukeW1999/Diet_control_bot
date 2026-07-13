@@ -291,6 +291,11 @@ def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
     weight = body.weight_kg if body else None
     protein_goal = weight * protein_goal_per_kg if weight else None
 
+    # HealthKit writes don't carry a protein goal; backfill it onto the diet record
+    # so every downstream reader (morning report, weekly report) has it.
+    if protein_goal and not rec.protein_goal_g:
+        rec.protein_goal_g = round(protein_goal, 1)
+
     calorie_deficit = bmr - (rec.total_calories or 0) + (rec.exercise_calories or 0)
 
     summary = session.get(DailySummary, rec.date)
