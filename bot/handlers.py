@@ -19,11 +19,52 @@ _chat_mode: str = "auto"  # "auto" | "coach" | "psychologist"
 
 _CONV_LOG = os.path.join(os.path.dirname(__file__), "..", "data", "conversation_log.jsonl")
 
-# When True, the next photo is parsed as an English nutrition label (one-shot).
-_nutrition_mode: bool = False
+# Food logging state. Armed by the 🍎 button or /food; then a barcode photo
+# (→ Open Food Facts) or a text description (→ Qwen + web search) is logged as food.
+# After a barcode lookup, `canon` holds per-100g facts while we wait for grams.
+_food: dict = {"armed": False, "canon": None, "name": None, "serving_g": None}
 
-# After a label is parsed, holds its per-100g/per-pack data awaiting a gram amount.
-_pending_nutrition: dict = {}
+
+def _food_reset() -> None:
+    _food.update({"armed": False, "canon": None, "name": None, "serving_g": None})
+
+# The single reusable "panel" bubble for summaries (/today, /week, … and the menu
+# buttons). Kept as ONE bubble that always floats to the bottom: each refresh
+# deletes the previous panel (which may be buried above later photos) and posts a
+# fresh one at the end of the chat, so it never accumulates and is never off-screen.
+_panel_chat_id = None
+_panel_msg_id = None
+
+
+async def _render_panel(ctx: ContextTypes.DEFAULT_TYPE, chat_id, text: str,
+                        parse_mode: str = None, drop_ids=()) -> None:
+    """Delete the old panel (and any given origin bubbles), then send a fresh panel
+    at the bottom of the chat with the menu attached."""
+    global _panel_chat_id, _panel_msg_id
+    ids = set(drop_ids)
+    if _panel_msg_id is not None and _panel_chat_id == chat_id:
+        ids.add(_panel_msg_id)
+    for mid in ids:
+        try:
+            await ctx.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    sent = await ctx.bot.send_message(
+        chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=main_menu(),
+    )
+    _panel_chat_id = chat_id
+    _panel_msg_id = sent.message_id
+
+
+async def _show_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str,
+                      parse_mode: str = None) -> None:
+    """Command entry (/today …): drop the command echo, then float a fresh panel
+    to the bottom (removing the previous one)."""
+    try:
+        await update.message.delete()  # bots may delete incoming msgs in private chats
+    except Exception:
+        pass
+    await _render_panel(ctx, update.effective_chat.id, text, parse_mode)
 
 
 def _log_event(event: dict) -> None:
@@ -326,17 +367,18 @@ async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
     msg = _build_today_summary(date.today())
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await _show_panel(update, ctx, msg, parse_mode="Markdown")
 
 
-async def cmd_nutrition(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Arm nutrition-label mode from the / menu, then wait for a photo."""
+async def cmd_food(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Arm food logging from the / menu: next barcode photo or text is logged as food."""
     if not _allowed(update):
         return
-    global _nutrition_mode
-    _nutrition_mode = True
+    _food.update({"armed": True, "canon": None, "name": None, "serving_g": None})
     await update.message.reply_text(
-        "🥗 记营养表已就绪。\n拍一张英文营养成分表照片发给我，我解析成营养数据（每份 per pack）。"
+        "🍎 记食物已就绪。\n"
+        "· 拍一张商品条码照片 → 我查 Open Food Facts，再问你吃了多少克\n"
+        "· 或直接文字描述（如「一个巨无霸」「两个水煮蛋」）→ 我联网估算热量"
     )
 
 
@@ -347,7 +389,7 @@ async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     start = today - timedelta(days=6)
     records = crud.get_daily_summaries_range(start, today)
     if not records:
-        await update.message.reply_text("本周还没有数据。")
+        await _show_panel(update, ctx, "本周还没有数据。")
         return
 
     total_deficit = sum(r.calorie_deficit or 0 for r in records)
@@ -371,7 +413,7 @@ async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"🥩 蛋白质达标天数：{protein_days}/{len(records)} 天"
         f"{weight_trend}"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await _show_panel(update, ctx, text, parse_mode="Markdown")
 
 
 async def cmd_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -379,9 +421,9 @@ async def cmd_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     rec = crud.get_latest_body_composition()
     if not rec:
-        await update.message.reply_text("还没有身体成分记录，发一张体成分截图给我吧。")
+        await _show_panel(update, ctx, "还没有身体成分记录，发一张体成分截图给我吧。")
         return
-    await update.message.reply_text(_format_body_reply(rec, prev=None), parse_mode="Markdown")
+    await _show_panel(update, ctx, _format_body_reply(rec, prev=None), parse_mode="Markdown")
 
 
 async def cmd_workout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -391,7 +433,7 @@ async def cmd_workout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     start = today - timedelta(days=6)
     workouts = crud.get_workouts_range(start, today)
     if not workouts:
-        await update.message.reply_text("本周还没有训练记录。")
+        await _show_panel(update, ctx, "本周还没有训练记录。")
         return
     lines = [f"💪 本周训练（共 {len(workouts)} 次）\n"]
     for w in workouts:
@@ -400,7 +442,7 @@ async def cmd_workout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if len(exercises) > 3:
             ex_names += f" 等{len(exercises)}个动作"
         lines.append(f"• {w.date} — {ex_names or w.workout_type}")
-    await update.message.reply_text("\n".join(lines))
+    await _show_panel(update, ctx, "\n".join(lines))
 
 
 async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -418,37 +460,44 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     logger.info(f"Chat ID: {update.effective_chat.id}")
 
-    import base64
     photo = update.message.photo[-1]
     file = await ctx.bot.get_file(photo.file_id)
     image_bytes = bytes(await file.download_as_bytearray())
-    b64 = base64.b64encode(image_bytes).decode()
 
-    # Nutrition-label mode (one-shot): parse English label via qwen3.7-plus + Python validation.
-    global _nutrition_mode
-    if _nutrition_mode:
-        _nutrition_mode = False  # one-shot
-        wait_msg = await update.message.reply_text("🥗 正在解析营养表...")
+    # Food mode: a photo is a product barcode → decode → Open Food Facts.
+    if _food["armed"]:
+        wait_msg = await update.message.reply_text("🔎 正在识别条码...")
         try:
-            from llm.nutrition import parse_nutrition_label, format_reply
-            result = await parse_nutrition_label(b64, column="pack")
-            await wait_msg.edit_text(format_reply(result))
-            # remember it so the next text (a gram amount) can be scaled
-            _pending_nutrition.clear()
-            _pending_nutrition.update({
-                "canon": result.get("table", {}),
-                "perpack": result.get("healthkit", {}),
-            })
-            _log_event({"type": "nutrition_label", "healthkit": result.get("healthkit"),
-                        "warnings": result.get("warnings")})
+            from utils.barcode import decode as decode_barcode
+            from llm.foodsearch import lookup_barcode
+            from llm.nutrition import format_off_prompt
+            code = decode_barcode(image_bytes)
+            if not code:
+                await wait_msg.edit_text(
+                    "没识别出条码。把条码拍清楚、正对着再发一次，\n"
+                    "或直接文字描述这个食物（如「乐事原味薯片 一包」），我来估。"
+                )
+                return  # stay armed: a follow-up photo or text still counts
+            await wait_msg.edit_text(f"🔎 条码 {code}，查 Open Food Facts...")
+            prod = await lookup_barcode(code)
+            if not prod:
+                await wait_msg.edit_text(
+                    f"Open Food Facts 里没有条码 {code} 的营养数据。\n"
+                    "直接文字描述这个食物，我联网估算。"
+                )
+                return  # stay armed for a text description
+            _food.update({"armed": True, "canon": prod["canon"],
+                          "name": prod["name"], "serving_g": prod.get("serving_g")})
+            await wait_msg.edit_text(format_off_prompt(prod))
+            _log_event({"type": "barcode", "code": code, "name": prod["name"]})
         except Exception as e:
-            logger.exception("nutrition parse failed")
-            await wait_msg.edit_text(f"解析失败：{e}")
+            logger.exception("barcode/OFF failed")
+            await wait_msg.edit_text(f"查询失败：{e}")
         return
 
-    # Photos are only used for English nutrition labels now — guide to the button.
+    # Not in food mode: guide the user to the button.
     await update.message.reply_text(
-        "要记营养标签，先点下面的 🥗 记营养表 按钮，再发图片。",
+        "要记食物，先点下面的 🍎 记食物 按钮（或发 /food），再拍条码或文字描述。",
         reply_markup=main_menu(),
     )
 
@@ -463,25 +512,41 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
     logger.info("[MSG] mode=%s text=%s", _chat_mode, text)
 
-    # ── 营养表：解析后等待用户回复克数 ──────────────────────────────────────
-    if _pending_nutrition.get("canon"):
-        from llm.nutrition import scale_to_grams, format_scaled, format_scaled_pack
-        if text in ("整份", "整包", "一份", "全部", "pack", "whole"):
-            perpack = _pending_nutrition.get("perpack", {})
-            _pending_nutrition.clear()
-            await update.message.reply_text(format_scaled_pack(perpack))
-            return
-        m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(?:g|克|G|克重)?\s*$", text)
-        if m:
-            grams = float(m.group(1))
-            canon = _pending_nutrition["canon"]
-            _pending_nutrition.clear()
+    # ── 记食物①：条码查完后，等用户回克数 → 换算 → 写入健康 ──────────────────
+    if _food.get("canon"):
+        from llm.nutrition import scale_to_grams, format_scaled
+        grams = None
+        serving_g = _food.get("serving_g")
+        if text in ("整份", "整包", "一份", "全部", "pack", "whole") and isinstance(serving_g, (int, float)):
+            grams = float(serving_g)
+        else:
+            m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(?:g|克|G|克重)?\s*$", text)
+            if m:
+                grams = float(m.group(1))
+        if grams is not None:
+            canon = _food["canon"]
+            _food_reset()
             scaled = scale_to_grams(canon, grams)
             await update.message.reply_text(format_scaled(scaled))
-            _log_event({"type": "nutrition_scaled", "grams": grams, "healthkit": scaled})
+            _log_event({"type": "food_scaled", "grams": grams, "healthkit": scaled})
             return
-        # anything else cancels the pending flow and falls through to normal handling
-        _pending_nutrition.clear()
+        # not a gram amount → drop the pending state and fall through to normal handling
+        _food_reset()
+
+    # ── 记食物②：文字描述 → Qwen 联网估算 → 写入健康 ────────────────────────
+    if _food.get("armed"):
+        _food_reset()
+        wait = await update.message.reply_text("🍎 联网估算中...")
+        try:
+            from llm.foodsearch import estimate_food_text
+            from llm.nutrition import format_estimate
+            est = await estimate_food_text(text)
+            await wait.edit_text(format_estimate(est))
+            _log_event({"type": "food_estimate", "text": text, "healthkit": est})
+        except Exception as e:
+            logger.exception("food estimate failed")
+            await wait.edit_text(f"估算失败：{e}")
+        return
 
     # ── 固定路由：教练/聊天模式直接跳过所有分类 API ──────────────────────────
     if _chat_mode == "coach":
@@ -686,28 +751,24 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
 # ── Callback query (inline keyboard) ─────────────────────────────────────────
 
-async def _menu_edit(query, text, parse_mode=None) -> None:
-    """Refresh the menu bubble in place: edit the same message and re-attach the
-    menu so tapping today/week/… repeatedly updates one bubble instead of piling
-    up new messages. Swallows Telegram's 'message is not modified' (same content)."""
-    from telegram.error import BadRequest
-    try:
-        await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=main_menu())
-    except BadRequest as e:
-        if "not modified" not in str(e).lower():
-            raise
+async def _panel_from_cb(ctx, query, text, parse_mode=None) -> None:
+    """A menu button floats a fresh panel to the bottom, dropping the tapped bubble
+    (the old panel/menu) so the refreshed view is always the newest message."""
+    await _render_panel(ctx, query.message.chat_id, text, parse_mode,
+                        drop_ids=(query.message.message_id,))
 
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    global _nutrition_mode
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    if data == "nutrition_on":
-        _nutrition_mode = True
+    if data == "food_on":
+        _food.update({"armed": True, "canon": None, "name": None, "serving_g": None})
         await query.edit_message_text(
-            "🥗 记营养表已就绪。\n发一张英文营养成分表照片给我，我解析成营养数据（每份 per pack）。"
+            "🍎 记食物已就绪。\n"
+            "· 拍一张商品条码照片 → 查 Open Food Facts，再问你吃了多少克\n"
+            "· 或直接文字描述（如「一个巨无霸」）→ 联网估算热量"
         )
         return
 
@@ -719,13 +780,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "today":
-        await _menu_edit(query, _build_today_summary(date.today()), parse_mode="Markdown")
+        await _panel_from_cb(ctx, query, _build_today_summary(date.today()), parse_mode="Markdown")
     elif data == "week":
         today = date.today()
         start = today - timedelta(days=6)
         records = crud.get_daily_summaries_range(start, today)
         if not records:
-            await _menu_edit(query, "本周还没有数据。")
+            await _panel_from_cb(ctx, query, "本周还没有数据。")
         else:
             total_deficit = sum(r.calorie_deficit or 0 for r in records)
             avg_deficit = total_deficit / len(records)
@@ -739,29 +800,29 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
                 f"📈 日均缺口：{avg_deficit:.0f} kcal\n"
                 f"🥩 蛋白质达标天数：{protein_days}/{len(records)} 天"
             )
-            await _menu_edit(query, text, parse_mode="Markdown")
+            await _panel_from_cb(ctx, query, text, parse_mode="Markdown")
     elif data == "body":
         rec = crud.get_latest_body_composition()
         if not rec:
-            await _menu_edit(query, "还没有身体成分记录。")
+            await _panel_from_cb(ctx, query, "还没有身体成分记录。")
         else:
-            await _menu_edit(query, _format_body_reply(rec, None), parse_mode="Markdown")
+            await _panel_from_cb(ctx, query, _format_body_reply(rec, None), parse_mode="Markdown")
     elif data == "workout":
         today = date.today()
         workouts = crud.get_workouts_range(today - timedelta(days=6), today)
         if not workouts:
-            await _menu_edit(query, "本周还没有训练记录。")
+            await _panel_from_cb(ctx, query, "本周还没有训练记录。")
         else:
             lines = [f"💪 本周训练（{len(workouts)} 次）\n"]
             for w in workouts:
                 exercises = json.loads(w.exercises or "[]")
                 ex_names = "、".join(e["exercise"] for e in exercises[:3])
                 lines.append(f"• {w.date} — {ex_names or w.workout_type}")
-            await _menu_edit(query, "\n".join(lines))
+            await _panel_from_cb(ctx, query, "\n".join(lines))
     elif data == "report":
         await query.edit_message_text("正在生成周报...")
         report = await _generate_report()
-        await _menu_edit(query, report)
+        await _panel_from_cb(ctx, query, report)
 
 
 # ── Formatting helpers ─────────────────────────────────────────────────────────

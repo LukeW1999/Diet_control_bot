@@ -18,7 +18,7 @@ def main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("训练记录", callback_data="workout"),
         ],
         [InlineKeyboardButton("生成周报", callback_data="report")],
-        [InlineKeyboardButton("🥗 记营养表", callback_data="nutrition_on")],
+        [InlineKeyboardButton("🍎 记食物（扫码/描述）", callback_data="food_on")],
     ])
 
 

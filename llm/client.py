@@ -19,32 +19,13 @@ def get_client() -> AsyncOpenAI:
     return _client
 
 
-async def vision_call(system_prompt: str, user_text: str, image_b64: str, model: str = None) -> str:
-    client = get_client()
-    model = model or os.getenv("QWEN_VISION_MODEL", "qwen-vl-plus")
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                    {"type": "text", "text": user_text},
-                ],
-            },
-        ],
-        temperature=0.1,
-    )
-    return response.choices[0].message.content
-
-
 async def text_call(
     system_prompt: str,
     user_text: str,
     model: str = None,
     history: list[dict] | None = None,
     thinking: bool = False,
+    search: bool = False,
 ) -> str:
     client = get_client()
     model = model or os.getenv("QWEN_TEXT_MODEL", "qwen3.6-plus")
@@ -54,13 +35,11 @@ async def text_call(
         messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
-    kwargs: dict = dict(model=model, messages=messages)
-    if thinking:
-        kwargs["extra_body"] = {"enable_thinking": True}
-        kwargs["temperature"] = 1.0
-    else:
-        kwargs["extra_body"] = {"enable_thinking": False}
-        kwargs["temperature"] = 0.7
+    extra: dict = {"enable_thinking": bool(thinking)}
+    if search:
+        extra["enable_search"] = True  # DashScope web search for grounded answers
+    kwargs: dict = dict(model=model, messages=messages, extra_body=extra)
+    kwargs["temperature"] = 1.0 if thinking else 0.7
 
     logger.debug("[LLM] model=%s thinking=%s prompt_head=%.80s", model, thinking, user_text)
 
