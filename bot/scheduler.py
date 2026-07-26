@@ -1,5 +1,4 @@
 import logging
-import os
 from datetime import date, timedelta
 
 from telegram import Bot
@@ -16,7 +15,6 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
     from llm.analyst import generate_morning_quote_commentary
     yesterday = date.today() - timedelta(days=1)
     diet = crud.get_diet_record(yesterday)
-    body = crud.get_latest_body_composition()
     bmr = crud.get_bmr()
 
     lines = ["早上好。☀️\n"]
@@ -30,8 +28,8 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
 
     # Yesterday's data (HealthKit total, synced ~23:30 the night before)
     if diet:
-        # deficit comes from DailySummary — it already uses HealthKit resting energy
-        # (when synced) instead of a static BMR. Falls back to static if missing.
+        # deficit comes from DailySummary — its BMR is the scientific Mifflin-St Jeor
+        # value (fixed per day), not Apple's synced resting energy. Falls back if missing.
         summ = crud.get_daily_summary(yesterday)
         deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None \
             else bmr - ((diet.total_calories or 0) - (diet.exercise_calories or 0))
@@ -64,13 +62,14 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
     else:
         lines.append("昨天没有饮食记录。没有数据就没有进步——今天记录好。\n")
 
-    weight = body.weight_kg if body else 90
-    protein_goal = float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8)) * weight
-
+    rc = crud.recommend_calories()
     lines += [
         "今天的任务：",
-        f"• 蛋白质 ≥ {protein_goal:.0f}g，不达标就是欠债",
-        f"• 热量控制在 {bmr - 500:.0f}–{bmr - 300:.0f} kcal",
+        f"• 蛋白质 ≥ {rc['protein_g']}g，不达标就是欠债",
+        f"• 推荐摄入：{rc['low']}–{rc['high']} kcal",
+        f"  （静态 BMR {rc['bmr']} + 运动回补 {rc['active_counted']}"
+        f"〔近7天日均 {rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 300~500）",
+        f"• 碳水 ~{rc['carbs_g']}g | 脂肪 ~{rc['fat_g']}g",
     ]
 
     # Daily quote from random book

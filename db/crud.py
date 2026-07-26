@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
 from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary, DiaryEntry, UserProfile
@@ -268,11 +268,13 @@ def update_user_profile(**kwargs) -> UserProfile:
         return rec
 
 
-def get_bmr() -> float:
-    """Calculate BMR from user profile + latest weight. Falls back to .env USER_BMR."""
+def get_bmr(weight: float | None = None) -> float:
+    """Calculate BMR (Mifflin-St Jeor) from user profile + weight. Falls back to
+    .env USER_BMR. Pass `weight` to compute for a specific day; else latest."""
     profile = get_user_profile()
-    body = get_latest_body_composition()
-    weight = body.weight_kg if body else None
+    if weight is None:
+        body = get_latest_body_composition()
+        weight = body.weight_kg if body else None
 
     if profile and profile.age and profile.height_cm and weight:
         # Mifflin-St Jeor
@@ -283,12 +285,55 @@ def get_bmr() -> float:
     return float(os.getenv("USER_BMR", 1916))
 
 
+def recommend_calories(deficit_low: int = 300, deficit_high: int = 500) -> dict:
+    """Recommended daily intake = static BMR + recent daily-average active energy
+    − a target deficit. The static part (BMR) is fixed for the day, so the target
+    doesn't drift through the day the way Apple's accumulating resting energy does.
+
+    Trackers (Apple Watch etc.) overestimate active energy by ~20-40%, so only a
+    fraction of it is added back (ACTIVE_EATBACK_PCT, default 0.5 — the fat-loss
+    consensus). Set it to 1.0 to trust the tracker fully, 0 to ignore exercise.
+
+    Also returns macro targets so intake can be split into protein/fat/carbs:
+    protein = weight × goal_per_kg (fixed), fat = weight × 0.8 (cut floor),
+    carbs = whatever calories remain at the recommended ceiling."""
+    body = get_latest_body_composition()
+    weight = body.weight_kg if body else None
+    bmr = get_bmr(weight)
+    end = date.today()
+    recent = get_diet_records_range(end - timedelta(days=7), end)
+    active = [r.exercise_calories for r in recent if r.exercise_calories]
+    avg_active = round(sum(active) / len(active)) if active else 0
+    eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.5))
+    active_counted = round(avg_active * eatback)
+    tdee = bmr + active_counted
+    low = round(tdee - deficit_high)
+    high = round(tdee - deficit_low)
+
+    protein_g = round(weight * float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8))) if weight else 0
+    fat_g = round(weight * 0.8) if weight else 0
+    carbs_g = round(max(high - protein_g * 4 - fat_g * 9, 0) / 4)
+    return {
+        "bmr": round(bmr),
+        "avg_active": avg_active,
+        "active_counted": active_counted,
+        "eatback_pct": round(eatback * 100),
+        "tdee": round(tdee),
+        "low": low,
+        "high": high,
+        "protein_g": protein_g,
+        "fat_g": fat_g,
+        "carbs_g": carbs_g,
+    }
+
+
 def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
-    bmr = float(os.getenv("USER_BMR", 1916))
     protein_goal_per_kg = float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8))
 
     body = session.scalar(select(BodyComposition).where(BodyComposition.date == rec.date))
     weight = body.weight_kg if body else None
+    # Scientific BMR from height/age/weight, not Apple's synced resting energy.
+    bmr = get_bmr(weight=weight)
     protein_goal = weight * protein_goal_per_kg if weight else None
 
     # HealthKit writes don't carry a protein goal; backfill it onto the diet record

@@ -904,17 +904,25 @@ def _build_today_summary(today: date) -> str:
         bmr = summ.bmr if summ and summ.bmr else crud.get_bmr()
         net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
         deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None else bmr - net
-        # protein goal lives on DailySummary; HK-written diet records have none.
-        protein_goal_g = (summ.protein_goal_g if summ and summ.protein_goal_g
-                          else (diet.protein_goal_g or 0))
+        rc = crud.recommend_calories()
+        p, c, f = (diet.protein_g or 0), (diet.carbs_g or 0), (diet.fat_g or 0)
+        bal = lambda left: f"还可吃 {round(left)}" if round(left) >= 0 else f"超 {-round(left)}"
+        protein_status = "达标 ✅" if p >= rc["protein_g"] else f"还需 {round(rc['protein_g'] - p)}"
         lines += [
             f"🔥 摄入：{(diet.total_calories or 0):.0f} kcal | 运动：{(diet.exercise_calories or 0):.0f} kcal",
             f"📉 热量缺口：{deficit:.0f} kcal",
-            f"🥩 蛋白质：{(diet.protein_g or 0):.0f}g / {protein_goal_g:.0f}g",
-            f"🍚 碳水：{(diet.carbs_g or 0):.0f}g | 🧈 脂肪：{(diet.fat_g or 0):.0f}g",
+            f"🎯 推荐摄入：{rc['low']}–{rc['high']} kcal（{bal(rc['high'] - (diet.total_calories or 0))}）",
+            f"🥩 蛋白质：{p:.0f}g / {rc['protein_g']}g（{protein_status}）",
+            f"🍚 碳水：{c:.0f}g / {rc['carbs_g']}g（{bal(rc['carbs_g'] - c)}）",
+            f"🧈 脂肪：{f:.0f}g / {rc['fat_g']}g（{bal(rc['fat_g'] - f)}）",
         ]
     else:
+        rc = crud.recommend_calories()
         lines.append(
+            f"🎯 今日推荐摄入：{rc['low']}–{rc['high']} kcal"
+            f"（静态 {rc['bmr']} + 运动回补 {rc['active_counted']}"
+            f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 300~500）\n"
+            f"🥩 蛋白质 {rc['protein_g']}g | 🍚 碳水 {rc['carbs_g']}g | 🧈 脂肪 {rc['fat_g']}g\n\n"
             "今天的数据还没同步。\n"
             "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。"
         )

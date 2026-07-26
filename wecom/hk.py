@@ -88,21 +88,7 @@ def hk_ingest():
         "weight": bdata.get("weight_kg"), "bodyfat": bdata.get("body_fat_pct"),
     }
 
-    # If HealthKit resting energy is provided, use it as the day's basal instead
-    # of the static BMR — deficit = resting - intake + active (do NOT add both).
-    resting = _f(body.get("resting"))
-    if resting and resting > 0:
-        from db.crud import _session
-        from db.models import DailySummary
-        resting = round(resting)
-        deficit = resting - (rec.total_calories or 0) + (rec.exercise_calories or 0)
-        with _session() as s:
-            summ = s.get(DailySummary, rec.date)
-            if summ:
-                summ.bmr = resting
-                summ.calorie_deficit = deficit
-                s.commit()
-        resp["resting"] = resting
-        resp["deficit"] = deficit
-
+    # NB: Apple's synced resting energy is intentionally ignored. The day's basal
+    # comes from the scientific BMR (Mifflin-St Jeor) in _update_daily_summary_from_diet,
+    # which is fixed per day and doesn't over-read like Apple's resting energy.
     return jsonify(resp)
