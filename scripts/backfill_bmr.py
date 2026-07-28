@@ -19,7 +19,11 @@ def main() -> None:
         for summ in summaries:
             diet = s.scalar(select(DietRecord).where(DietRecord.date == summ.date))
             body = s.scalar(select(BodyComposition).where(BodyComposition.date == summ.date))
-            weight = (body.weight_kg if body else None) or summ.weight_kg
+            # Interpolate when that day was not weighed. Falling through to
+            # get_bmr(None) would use *today's* weight, stamping a June row with a
+            # BMR from 5 kg later.
+            weight = ((body.weight_kg if body else None) or summ.weight_kg
+                      or crud.weight_on(summ.date))
             bmr = crud.get_bmr(weight=weight)
             intake = (diet.total_calories if diet else None) or summ.total_calories_in or 0
             exercise = (diet.exercise_calories if diet else 0) or 0

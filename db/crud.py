@@ -256,6 +256,33 @@ def get_bmr(weight: float | None = None) -> float:
     return float(os.getenv("USER_BMR", 1916))
 
 
+def weight_on(target_date: date) -> float | None:
+    """Weight for a date, linearly interpolated between the surrounding weigh-ins.
+
+    Without this a date with no weigh-in falls back to the *latest* weight, so a June
+    summary ends up carrying today's BMR — off by ~50 kcal after a 5 kg loss, and
+    worse the further back you look. Beyond the recorded range the nearest weigh-in is
+    carried flat rather than extrapolated, since projecting a weight trend past the
+    data is guesswork."""
+    with _session() as s:
+        series = sorted(
+            (b.date, b.weight_kg)
+            for b in s.scalars(select(BodyComposition)).all() if b.weight_kg
+        )
+    if not series:
+        return None
+    if target_date <= series[0][0]:
+        return series[0][1]
+    if target_date >= series[-1][0]:
+        return series[-1][1]
+    prev = max(d for d, _ in series if d <= target_date)
+    nxt = min(d for d, _ in series if d >= target_date)
+    if prev == nxt:
+        return dict(series)[prev]
+    lo, hi = dict(series)[prev], dict(series)[nxt]
+    return lo + (hi - lo) * ((target_date - prev).days / (nxt - prev).days)
+
+
 def is_refeed_day(target_date: date) -> bool:
     with _session() as s:
         summ = s.get(DailySummary, target_date)
@@ -423,7 +450,11 @@ def calibrate_eatback(window_days: int = 42) -> dict:
     avg_active = sum(r.exercise_calories or 0 for r in logged) / len(logged)
     tdee = avg_intake - slope * 7700
     tdee_se = slope_se * 7700
-    bmr = get_bmr()
+    # Averaged across the window, not taken from the latest weigh-in: over a 56-day
+    # window the weight loss itself moves BMR by ~30 kcal, which lands straight in
+    # the eatback residual and biases it upward.
+    span = [today - timedelta(days=k) for k in range(1, window_days + 1)]
+    bmr = sum(get_bmr(weight=weight_on(d)) for d in span) / len(span)
 
     if avg_active <= 0:
         return {**result, "verdict": "insufficient"}

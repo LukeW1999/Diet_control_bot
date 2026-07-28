@@ -35,6 +35,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
 )
+# httpx logs every request line at INFO, and the Telegram API URL embeds the bot
+# token — that writes the token in plaintext to journald on every poll, where
+# anyone who can read the journal can lift it.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
