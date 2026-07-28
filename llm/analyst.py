@@ -449,10 +449,6 @@ def _format_weekly_data(data: dict) -> str:
                 f"肌肉{b.get('muscle_mass_kg', '?')}kg"
             )
 
-    workouts = data.get("workout_records", [])
-    if workouts:
-        lines.append(f"\n== 训练 ==\n共训练 {len(workouts)} 次")
-
     return "\n".join(lines)
 
 
@@ -489,6 +485,17 @@ def _format_context(ctx: dict) -> str:
         n = ctx.get("diet_record_count", 0)
         caveat = f"（仅{n}天数据，参考价值有限）" if n < 3 else ""
         lines.append(f"本周平均热量缺口：{ctx['week_avg_deficit']:.0f}kcal/天{caveat}")
+
+    # Silent when healthy: only surfaces when a row was written by something other
+    # than the current code, so the model can warn instead of quoting bad numbers.
+    from db import crud
+    bad = crud.summary_integrity()
+    if bad:
+        lines.append(
+            "\n【⚠️ 数据一致性告警：以下日期的存储值由非当前代码写入，"
+            "很可能有服务在跑旧版本。回答涉及这些日期的热量缺口时必须提醒用户数据不可信】\n"
+            + "\n".join(f"  {b}" for b in bad)
+        )
 
     # Pre-computed stats cache — LLM must use these numbers directly, no recalculation
     from utils.stats import load_stats_cache

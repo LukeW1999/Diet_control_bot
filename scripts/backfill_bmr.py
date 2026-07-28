@@ -1,5 +1,7 @@
 """One-off: recompute every DailySummary's BMR + deficit with the scientific
 Mifflin-St Jeor BMR (per-date weight), replacing the old Apple-resting figures."""
+import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,7 +23,8 @@ def main() -> None:
             bmr = crud.get_bmr(weight=weight)
             intake = (diet.total_calories if diet else None) or summ.total_calories_in or 0
             exercise = (diet.exercise_calories if diet else 0) or 0
-            new_deficit = round(bmr - intake + exercise)
+            eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
+            new_deficit = round(bmr - intake + exercise * eatback)
             if summ.bmr != bmr or summ.calorie_deficit != new_deficit:
                 print(f"{summ.date}: bmr {summ.bmr}->{bmr}  deficit {summ.calorie_deficit}->{new_deficit}")
                 summ.bmr = bmr

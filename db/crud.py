@@ -1,9 +1,10 @@
 import json
+import math
 import os
 from datetime import date, datetime, timedelta
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
-from .models import Base, DietRecord, BodyComposition, WorkoutRecord, DailySummary, DiaryEntry, UserProfile
+from .models import Base, DietRecord, BodyComposition, DailySummary, DiaryEntry, UserProfile
 from utils.food_log import write_entry as write_food_log
 
 
@@ -109,26 +110,6 @@ def upsert_body_composition(data: dict, image_path: str, raw_response: str) -> B
         return rec
 
 
-def save_workout(data: dict) -> WorkoutRecord:
-    with _session() as session:
-        record_date = _parse_date(data.get("date"))
-        rec = WorkoutRecord(
-            date=record_date,
-            workout_type=data.get("workout_type"),
-            exercises=json.dumps(data.get("exercises", []), ensure_ascii=False),
-            cardio_type=data.get("cardio", {}).get("type") if data.get("cardio") else None,
-            cardio_duration_min=data.get("cardio", {}).get("duration_min") if data.get("cardio") else None,
-            cardio_distance_km=data.get("cardio", {}).get("distance_km") if data.get("cardio") else None,
-            cardio_calories=data.get("cardio", {}).get("calories") if data.get("cardio") else None,
-            duration_min=data.get("duration_min"),
-            notes=data.get("notes"),
-        )
-        session.add(rec)
-        session.commit()
-        session.refresh(rec)
-        return rec
-
-
 def get_diet_record(target_date: date) -> DietRecord | None:
     with _session() as session:
         return session.scalar(select(DietRecord).where(DietRecord.date == target_date))
@@ -155,16 +136,6 @@ def get_diet_records_range(start: date, end: date) -> list[DietRecord]:
             select(DietRecord)
             .where(DietRecord.date >= start, DietRecord.date <= end)
             .order_by(DietRecord.date)
-        ).all()
-        return list(rows)
-
-
-def get_workouts_range(start: date, end: date) -> list[WorkoutRecord]:
-    with _session() as session:
-        rows = session.scalars(
-            select(WorkoutRecord)
-            .where(WorkoutRecord.date >= start, WorkoutRecord.date <= end)
-            .order_by(WorkoutRecord.date)
         ).all()
         return list(rows)
 
@@ -285,30 +256,96 @@ def get_bmr(weight: float | None = None) -> float:
     return float(os.getenv("USER_BMR", 1916))
 
 
-def recommend_calories(deficit_low: int = 300, deficit_high: int = 500) -> dict:
-    """Recommended daily intake = static BMR + recent daily-average active energy
-    − a target deficit. The static part (BMR) is fixed for the day, so the target
-    doesn't drift through the day the way Apple's accumulating resting energy does.
+def is_refeed_day(target_date: date) -> bool:
+    with _session() as s:
+        summ = s.get(DailySummary, target_date)
+        return bool(summ and summ.is_refeed)
 
-    Trackers (Apple Watch etc.) overestimate active energy by ~20-40%, so only a
-    fraction of it is added back (ACTIVE_EATBACK_PCT, default 0.5 — the fat-loss
-    consensus). Set it to 1.0 to trust the tracker fully, 0 to ignore exercise.
+
+def toggle_refeed(target_date: date) -> bool:
+    """Flip the refeed flag for a day (creating its summary row if needed). Returns
+    the new state. A refeed day recommends maintenance calories (zero deficit)."""
+    with _session() as s:
+        summ = s.get(DailySummary, target_date)
+        if not summ:
+            summ = DailySummary(date=target_date, updated_at=datetime.utcnow())
+            s.add(summ)
+        summ.is_refeed = 0 if summ.is_refeed else 1
+        s.commit()
+        return bool(summ.is_refeed)
+
+
+def refeed_status(target_date: date | None = None) -> dict:
+    """Earn refeed days off real scale progress, ratcheted on your all-time low so a
+    bounce up and back down can't re-earn. Each REFEED_WEIGHT_STEP_KG (default 1kg)
+    below the baseline banks one refeed; the baseline is anchored at your lowest weight
+    when the feature starts, so earning is forward-looking. No cap — refeeds stockpile.
+    `available` = earned − taken (refeed days already switched on)."""
+    step = float(os.getenv("REFEED_WEIGHT_STEP_KG", 1.0))
+    with _session() as s:
+        weights = [b.weight_kg for b in s.scalars(select(BodyComposition)).all() if b.weight_kg]
+        min_w = min(weights) if weights else None
+        taken = sum(1 for x in s.scalars(select(DailySummary)).all() if x.is_refeed)
+        prof = s.get(UserProfile, 1)
+        baseline = prof.refeed_weight_baseline if prof else None
+        if baseline is None and min_w is not None:  # lazy anchor at current low
+            if not prof:
+                prof = UserProfile(id=1)
+                s.add(prof)
+            prof.refeed_weight_baseline = min_w
+            baseline = min_w
+            s.commit()
+
+    earned = int(max(0, (baseline - min_w) // step)) if (baseline and min_w) else 0
+    available = max(earned - taken, 0)
+    next_low = round(baseline - (earned + 1) * step, 1) if baseline else None
+    to_next = round(min_w - next_low, 1) if (min_w is not None and next_low is not None) else None
+    return {
+        "step": step,
+        "baseline": round(baseline, 1) if baseline else None,
+        "current_min": round(min_w, 1) if min_w else None,
+        "earned": earned,
+        "taken": taken,
+        "available": available,
+        "next_low": next_low,
+        "to_next_kg": to_next,
+    }
+
+
+def recommend_calories(target_date: date | None = None) -> dict:
+    """Recommended daily intake = static BMR + recent daily-average active energy
+    − the deficit needed to hit MONTHLY_LOSS_KG (default 4). The static part (BMR)
+    is fixed for the day, so the target doesn't drift the way Apple's accumulating
+    resting energy does.
+
+    Trackers (Apple Watch etc.) overestimate active energy, so only a fraction is
+    added back (ACTIVE_EATBACK_PCT, default 0.4 — calibrated from Luke's actual
+    weight loss). Set 1.0 to trust the tracker fully, 0 to ignore exercise.
 
     Also returns macro targets so intake can be split into protein/fat/carbs:
     protein = weight × goal_per_kg (fixed), fat = weight × 0.8 (cut floor),
-    carbs = whatever calories remain at the recommended ceiling."""
+    carbs = whatever calories remain at the recommended ceiling.
+
+    On a refeed day the deficit is zeroed, so intake targets maintenance (TDEE)
+    and the extra calories land in carbs."""
+    target_date = target_date or date.today()
     body = get_latest_body_composition()
     weight = body.weight_kg if body else None
     bmr = get_bmr(weight)
-    end = date.today()
-    recent = get_diet_records_range(end - timedelta(days=7), end)
+    recent = get_diet_records_range(target_date - timedelta(days=7), target_date)
     active = [r.exercise_calories for r in recent if r.exercise_calories]
     avg_active = round(sum(active) / len(active)) if active else 0
-    eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.5))
+    eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
     active_counted = round(avg_active * eatback)
     tdee = bmr + active_counted
-    low = round(tdee - deficit_high)
-    high = round(tdee - deficit_low)
+
+    # Deficit sized for the monthly fat-loss goal (1 kg fat ≈ 7700 kcal); a refeed
+    # day zeroes it so intake targets maintenance.
+    refeed = is_refeed_day(target_date)
+    monthly_goal = float(os.getenv("MONTHLY_LOSS_KG", 4.0))
+    target_deficit = 0 if refeed else round(monthly_goal * 7700 / 30)
+    low = round(tdee - target_deficit - 100)   # a bit faster
+    high = round(tdee - target_deficit + 100)  # a bit slower
 
     protein_g = round(weight * float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8))) if weight else 0
     fat_g = round(weight * 0.8) if weight else 0
@@ -319,12 +356,131 @@ def recommend_calories(deficit_low: int = 300, deficit_high: int = 500) -> dict:
         "active_counted": active_counted,
         "eatback_pct": round(eatback * 100),
         "tdee": round(tdee),
+        "refeed": refeed,
+        "monthly_goal": monthly_goal,
+        "target_deficit": target_deficit,
         "low": low,
         "high": high,
         "protein_g": protein_g,
         "fat_g": fat_g,
         "carbs_g": carbs_g,
     }
+
+
+def calibrate_eatback(window_days: int = 42) -> dict:
+    """Fit ACTIVE_EATBACK_PCT from real scale movement over a trailing window.
+
+    Inverts the same model recommend_calories uses: TDEE = BMR + eatback × active.
+    TDEE is read off the energy balance as avg intake − weight trend × 7700, so
+    eatback = (TDEE − BMR) / avg active.
+
+    The trend is an OLS fit over every weigh-in in the window, never first-vs-last:
+    endpoints discard the series and inherit the full day-to-day water swing (~0.45
+    kg here), which on a 3-week window is worth ~±350 kcal of TDEE and produced a
+    72% estimate where the regression says 35%.
+
+    Slope standard error falls as N^-1.5, so patience pays superlinearly: ~±6pp of
+    eatback at 28 days, ~±3pp at 42. Hence `min_days` gates on having enough of the
+    window actually logged, and the verdict only moves eatback when the estimate
+    clears a 2-SE deadband, then only halfway, so the parameter cannot oscillate on
+    noise.
+
+    Caveat worth remembering when reading the number: eatback also absorbs error in
+    the Mifflin-St Jeor BMR (±10% individually, ±14pp of eatback on its own). It is
+    a fitted correction, not a physiological measurement."""
+    today = date.today()
+    start = today - timedelta(days=window_days)
+    # Today's log is still accumulating, so it would drag the intake mean down.
+    weights = [b for b in get_body_compositions_range(start, today - timedelta(days=1))
+               if b.weight_kg]
+    logged = [r for r in get_diet_records_range(start, today - timedelta(days=1))
+              if r.total_calories]
+
+    min_days = int(os.getenv("CALIBRATE_MIN_DAYS", 20))
+    current = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
+    result = {
+        "window_days": window_days,
+        "n_weights": len(weights),
+        "n_intake": len(logged),
+        "min_days": min_days,
+        "current_pct": round(current * 100),
+    }
+    # The residual SD needs n − 2 degrees of freedom, so never fit on fewer than 3.
+    if len(weights) < max(min_days, 3) or len(logged) < min_days:
+        return {**result, "verdict": "insufficient"}
+
+    xs = [(b.date - weights[0].date).days for b in weights]
+    ys = [b.weight_kg for b in weights]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    resid_sd = math.sqrt(sum((y - (my + slope * (x - mx))) ** 2
+                             for x, y in zip(xs, ys)) / (n - 2))
+    slope_se = resid_sd / math.sqrt(sxx)
+
+    avg_intake = sum(r.total_calories for r in logged) / len(logged)
+    avg_active = sum(r.exercise_calories or 0 for r in logged) / len(logged)
+    tdee = avg_intake - slope * 7700
+    tdee_se = slope_se * 7700
+    bmr = get_bmr()
+
+    if avg_active <= 0:
+        return {**result, "verdict": "insufficient"}
+    implied = (tdee - bmr) / avg_active
+    implied_se = tdee_se / avg_active
+
+    off_by = implied - current
+    within_deadband = abs(off_by) < 2 * implied_se
+    return {
+        **result,
+        "slope_kg_per_week": round(slope * 7, 3),
+        "slope_se_kg_per_week": round(slope_se * 7, 3),
+        "resid_sd_kg": round(resid_sd, 3),
+        "avg_intake": round(avg_intake),
+        "avg_active": round(avg_active),
+        "bmr": round(bmr),
+        "tdee": round(tdee),
+        "tdee_se": round(tdee_se),
+        "implied_pct": round(implied * 100),
+        "implied_se_pp": round(implied_se * 100, 1),
+        # Damped: move half the gap, so a single noisy window cannot swing the target.
+        "suggested_pct": round((current + off_by / 2) * 100),
+        "verdict": "deadband" if within_deadband else "adjust",
+    }
+
+
+def summary_integrity(days: int = 14) -> list[str]:
+    """Days whose stored BMR disagrees with the scientific BMR for that day's weight.
+
+    A DailySummary's `bmr` is always Mifflin-St Jeor from that date's weigh-in, so a
+    disagreement means something other than _update_daily_summary_from_diet wrote the
+    row: a stale process still holding old code, a half-deployed service, a manual
+    edit. That is exactly how the Apple-resting-energy regression went unnoticed for
+    days — it wrote 795–1904 into this field while every visible number stayed
+    plausible.
+
+    Checks BMR rather than the deficit on purpose: BMR is parameter-free, so tuning
+    ACTIVE_EATBACK_PCT or the intake target can never make this fire. Days with no
+    weigh-in are unverifiable (BMR falls back to the latest weight, which legitimately
+    drifts) and are skipped. Returns [] when healthy so callers can stay silent."""
+    today = date.today()
+    out = []
+    with _session() as s:
+        for summ in s.scalars(
+            select(DailySummary)
+            .where(DailySummary.date >= today - timedelta(days=days))
+            .order_by(DailySummary.date)
+        ).all():
+            if summ.bmr is None:
+                continue
+            body = s.scalar(select(BodyComposition).where(BodyComposition.date == summ.date))
+            if not (body and body.weight_kg):
+                continue
+            expected = get_bmr(weight=body.weight_kg)
+            if abs(summ.bmr - expected) > 1.0:
+                out.append(f"{summ.date}: 存储BMR {summ.bmr:.0f}，应为 {expected:.0f}")
+    return out
 
 
 def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
@@ -341,7 +497,10 @@ def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
     if protein_goal and not rec.protein_goal_g:
         rec.protein_goal_g = round(protein_goal, 1)
 
-    calorie_deficit = bmr - (rec.total_calories or 0) + (rec.exercise_calories or 0)
+    # Discount active energy (tracker overestimate) so the deficit — and the
+    # fat-loss projection built on it — matches reality, not the watch.
+    eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
+    calorie_deficit = bmr - (rec.total_calories or 0) + (rec.exercise_calories or 0) * eatback
 
     summary = session.get(DailySummary, rec.date)
     if not summary:

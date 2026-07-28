@@ -17,6 +17,16 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
     diet = crud.get_diet_record(yesterday)
     bmr = crud.get_bmr()
 
+    # Celebrate a newly-earned refeed day (a fresh 1kg scale low crossed the ratchet)
+    from bot.handlers import format_refeed_congrats
+    status = crud.refeed_status()
+    prof = crud.get_user_profile()
+    prev = (prof.refeed_bonus_notified or 0) if prof else 0
+    if status["earned"] > prev:
+        await bot.send_message(chat_id=chat_id, text=format_refeed_congrats(status))
+    if status["earned"] != prev:
+        crud.update_user_profile(refeed_bonus_notified=status["earned"])
+
     lines = ["早上好。☀️\n"]
 
     # Weather
@@ -68,7 +78,8 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
         f"• 蛋白质 ≥ {rc['protein_g']}g，不达标就是欠债",
         f"• 推荐摄入：{rc['low']}–{rc['high']} kcal",
         f"  （静态 BMR {rc['bmr']} + 运动回补 {rc['active_counted']}"
-        f"〔近7天日均 {rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 300~500）",
+        f"〔近7天日均 {rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 {rc['target_deficit']}"
+        f"〔目标 {rc['monthly_goal']:g}kg/月〕）",
         f"• 碳水 ~{rc['carbs_g']}g | 脂肪 ~{rc['fat_g']}g",
     ]
 

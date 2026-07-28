@@ -9,7 +9,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from db import crud
-from llm import parsers, analyst
+from llm import analyst
 from utils.media_store import save_document as _media_save_doc
 from .keyboards import main_menu, mode_menu, MODE_LABELS
 
@@ -50,7 +50,8 @@ async def _render_panel(ctx: ContextTypes.DEFAULT_TYPE, chat_id, text: str,
         except Exception:
             pass
     sent = await ctx.bot.send_message(
-        chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=main_menu(),
+        chat_id=chat_id, text=text, parse_mode=parse_mode,
+        reply_markup=main_menu(refeed_on=crud.is_refeed_day(date.today())),
     )
     _panel_chat_id = chat_id
     _panel_msg_id = sent.message_id
@@ -78,16 +79,6 @@ def _log_event(event: dict) -> None:
 _background_tasks: set = set()  # keep task references to prevent GC
 _conversation_history: list[dict] = []  # last N turns for multi-turn context
 _MAX_HISTORY_TURNS = 8  # keep 8 exchanges (16 messages)
-
-_WORKOUT_KEYWORDS = [
-    "深蹲", "卧推", "硬拉", "引体", "哑铃", "杠铃", "训练", "练了",
-    "高位下拉", "划船", "推举", "飞鸟", "弯举", "臂屈伸", "夹胸",
-    "腿举", "腿屈伸", "腿弯举", "臀推", "保加利亚", "罗马尼亚",
-    "坐姿", "站姿", "器械", "绳索", "史密斯",
-    "跑步", "跑步机", "椭圆机", "跳绳", "踏步",
-    "rpe", "RPE", "rm", "RM",
-    "kg*", "kg×", "*8", "*10", "*12", "*6", "*5", "*4", "*3",
-]
 
 _CLOSING_SIGNALS = frozenset([
     "好了", "好的谢谢", "谢谢", "感谢", "再见", "拜拜", "明白了",
@@ -210,15 +201,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "请把这个 ID 填入 .env 文件的 ALLOWED_CHAT_ID。\n\n"
         "🥗 记营养表：点下面的「记营养表」按钮，再发英文营养标签照片\n\n"
         "💬 发文字给我：\n"
-        "  • 训练记录（如 深蹲80kg 5组5次）\n"
+        "  • 描述食物记热量（如 一个巨无霸）\n"
         "  • 任何关于你健康数据的问题\n\n"
         "📊 每天数据（吃/练/体重/体脂）由 HealthKit 自动同步\n\n"
-        "📋 指令：/today /week /body /workout /report /profile /update\n\n"
+        "📋 指令：/today /week /month /body /report /profile /update\n\n"
         "💡 /profile 查看个人资料和当前 BMR\n"
         "/update age 27 · /update height 172 · /update gender male\n"
         "/update goal 75.0 · /update protein 1.8",
         parse_mode="Markdown",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(refeed_on=crud.is_refeed_day(date.today())),
     )
 
 
@@ -316,6 +307,53 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     safe_high = latest.weight_kg * 0.01
     lines.append(f"\n✅ 安全减速：{safe_low:.2f}–{safe_high:.2f} kg/周")
 
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_calibrate(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check ACTIVE_EATBACK_PCT against real scale movement. /calibrate [window_days]"""
+    if not _allowed(update):
+        return
+    # Capped: a 90-day fit reports ±2pp but measures a regime that is over. The
+    # weight curve is convex (loss decelerating ~0.3 kg/wk over 90 days), so a long
+    # window averages in the early rapid phase and overstates today's eatback by
+    # ~25pp. Beyond ~8 weeks the extra precision is precision about the wrong thing.
+    asked = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 42
+    window = min(asked, 56)
+    c = crud.calibrate_eatback(window)
+
+    lines = [f"🔬 eatback 校准（近 {c['window_days']} 天）\n"]
+    if window < asked:
+        lines.append(f"（已从 {asked} 天收窄到 {window} 天：更长的窗口会把早期"
+                     f"快速掉秤期平均进来，高估当前值）\n")
+    if c["verdict"] == "insufficient":
+        lines.append(f"数据不足：称重 {c['n_weights']} 天、饮食 {c['n_intake']} 天，")
+        lines.append(f"两者都需要至少 {c['min_days']} 天。")
+        lines.append(f"\n当前 eatback：{c['current_pct']}%（保持不变）")
+        lines.append("\n💡 每天称重 + 记全摄入，窗口越长精度提升越快"
+                     "（误差 ∝ N^-1.5）。")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    lines.append(f"样本：称重 {c['n_weights']} 天、饮食 {c['n_intake']} 天")
+    lines.append(f"体重趋势：{c['slope_kg_per_week']:+.3f} ± {c['slope_se_kg_per_week']:.3f} kg/周")
+    lines.append(f"称重噪音：SD {c['resid_sd_kg']:.2f} kg\n")
+    lines.append(f"平均摄入：{c['avg_intake']} kcal")
+    lines.append(f"平均活动：{c['avg_active']} kcal")
+    lines.append(f"BMR：{c['bmr']} kcal")
+    lines.append(f"推算 TDEE：{c['tdee']} ± {c['tdee_se']} kcal\n")
+    lines.append(f"隐含 eatback：{c['implied_pct']}% ± {c['implied_se_pp']}pp")
+    lines.append(f"当前设定：{c['current_pct']}%")
+
+    if c["verdict"] == "deadband":
+        lines.append("\n✅ 差距在噪音范围内（< 2SE），不用动。")
+    else:
+        lines.append(f"\n⚠️ 差距超过 2SE，建议调整（阻尼后取一半）：")
+        lines.append(f"ACTIVE_EATBACK_PCT={c['suggested_pct']/100:.2f}")
+        lines.append("改 .env 后重启 health-bot 生效。")
+
+    lines.append("\n💡 eatback 同时吸收了 BMR 公式误差（±10%），是拟合系数，"
+                 "不是生理量。")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -426,23 +464,10 @@ async def cmd_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _show_panel(update, ctx, _format_body_reply(rec, prev=None), parse_mode="Markdown")
 
 
-async def cmd_workout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
-    today = date.today()
-    start = today - timedelta(days=6)
-    workouts = crud.get_workouts_range(start, today)
-    if not workouts:
-        await _show_panel(update, ctx, "本周还没有训练记录。")
-        return
-    lines = [f"💪 本周训练（共 {len(workouts)} 次）\n"]
-    for w in workouts:
-        exercises = json.loads(w.exercises or "[]")
-        ex_names = "、".join(e["exercise"] for e in exercises[:3])
-        if len(exercises) > 3:
-            ex_names += f" 等{len(exercises)}个动作"
-        lines.append(f"• {w.date} — {ex_names or w.workout_type}")
-    await _show_panel(update, ctx, "\n".join(lines))
+    await _show_panel(update, ctx, _build_month_summary(date.today()), parse_mode="Markdown")
 
 
 async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -498,7 +523,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     # Not in food mode: guide the user to the button.
     await update.message.reply_text(
         "要记食物，先点下面的 🍎 记食物 按钮（或发 /food），再拍条码或文字描述。",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(refeed_on=crud.is_refeed_day(date.today())),
     )
 
 
@@ -593,29 +618,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         weight = float(weight_match.group(1))
         crud.quick_weight_entry(date.today(), weight)
         await update.message.reply_text(f"✅ 体重已记录：{weight} kg（{date.today()}）")
-        return
-
-    # Workout detection — before LLM calls so keywords always win
-    if any(kw in text for kw in _WORKOUT_KEYWORDS):
-        wait = await update.message.reply_text("正在解析训练记录...")
-        try:
-            data, raw = await parsers.parse_workout_text(text)
-            rec = crud.save_workout(data)
-            exercises = json.loads(rec.exercises or "[]")
-            ex_lines = []
-            for ex in exercises:
-                sets_str = ", ".join(
-                    f"{s.get('weight')}kg×{s.get('reps')}" + (f"@RPE{s['rpe']}" if s.get("rpe") else "")
-                    for s in ex.get("sets", [])
-                )
-                ex_lines.append(f"  • {ex['exercise']}：{sets_str}")
-            reply = f"✅ {rec.date} 训练已记录\n\n💪 动作：\n" + "\n".join(ex_lines)
-            if rec.notes:
-                reply += f"\n\n📝 {rec.notes}"
-            await wait.edit_text(reply)
-        except Exception as e:
-            logger.exception("Workout parse error")
-            await wait.edit_text(f"解析训练记录失败：{e}")
         return
 
     # Diary / mood entry — checked BEFORE notes so emotional content starts a session
@@ -760,8 +762,24 @@ async def _panel_from_cb(ctx, query, text, parse_mode=None) -> None:
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     data = query.data
+
+    if data == "refeed_toggle":
+        today = date.today()
+        if not crud.is_refeed_day(today):
+            status = crud.refeed_status(today)
+            if status["available"] < 1:
+                await query.answer(
+                    f"还没赢得 Refeed～降到 {status['next_low']}kg 就有一个"
+                    f"（还需 {status['to_next_kg']}kg）💪",
+                    show_alert=True)
+                return
+        on = crud.toggle_refeed(today)
+        await query.answer("已开启 Refeed 日 🍚" if on else "已关闭 Refeed 日")
+        await _panel_from_cb(ctx, query, _build_today_summary(today), parse_mode="Markdown")
+        return
+
+    await query.answer()
 
     if data == "food_on":
         _food.update({"armed": True, "canon": None, "name": None, "serving_g": None})
@@ -807,18 +825,8 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             await _panel_from_cb(ctx, query, "还没有身体成分记录。")
         else:
             await _panel_from_cb(ctx, query, _format_body_reply(rec, None), parse_mode="Markdown")
-    elif data == "workout":
-        today = date.today()
-        workouts = crud.get_workouts_range(today - timedelta(days=6), today)
-        if not workouts:
-            await _panel_from_cb(ctx, query, "本周还没有训练记录。")
-        else:
-            lines = [f"💪 本周训练（{len(workouts)} 次）\n"]
-            for w in workouts:
-                exercises = json.loads(w.exercises or "[]")
-                ex_names = "、".join(e["exercise"] for e in exercises[:3])
-                lines.append(f"• {w.date} — {ex_names or w.workout_type}")
-            await _panel_from_cb(ctx, query, "\n".join(lines))
+    elif data == "month":
+        await _panel_from_cb(ctx, query, _build_month_summary(date.today()), parse_mode="Markdown")
     elif data == "report":
         await query.edit_message_text("正在生成周报...")
         report = await _generate_report()
@@ -892,19 +900,43 @@ def _format_body_reply(rec, prev) -> str:
     return "\n".join(lines)
 
 
+def _refeed_bank_line(status: dict) -> str:
+    """One-line bank status for the /today panel."""
+    if status["current_min"] is None:
+        return "🎖️ Refeed：暂无体重数据"
+    if status["available"] > 0:
+        return f"🎖️ 可用 Refeed：{status['available']} 天（最低 {status['current_min']}kg，可囤积）"
+    return (f"🎖️ 可用 Refeed：0 天 ｜ 降到 {status['next_low']}kg 再赢一个"
+            f"（还需 {status['to_next_kg']}kg）")
+
+
+def format_refeed_congrats(status: dict) -> str:
+    """Celebration screen shown when a new refeed day is earned."""
+    return (
+        "🎉 恭喜！你刷新了最低体重，赢得一个 Refeed Day！\n\n"
+        f"⚖️ 当前最低体重：{status['current_min']} kg\n"
+        f"📉 起始基准：{status['baseline']} kg（每再降 {status['step']:g}kg 赢 1 个）\n"
+        f"🍚 可用 Refeed：{status['available']} 天（无上限，可一直囤积）\n"
+        f"🎯 下一个：降到 {status['next_low']} kg（还需 {status['to_next_kg']}kg）\n\n"
+        "想用哪天，点菜单「🔁 Refeed 日」开启，当天推荐就变成维持热量。"
+    )
+
+
 def _build_today_summary(today: date) -> str:
     diet = crud.get_diet_record(today)
     summary = crud.get_daily_summary(today)
     body = crud.get_latest_body_composition()
 
     lines = [f"📅 今日汇总（{today}）\n"]
+    if crud.is_refeed_day(today):
+        lines.append("🔁 今日 Refeed：维持热量，无缺口\n")
 
     if diet:
         summ = crud.get_daily_summary(today)
         bmr = summ.bmr if summ and summ.bmr else crud.get_bmr()
         net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
         deficit = summ.calorie_deficit if summ and summ.calorie_deficit is not None else bmr - net
-        rc = crud.recommend_calories()
+        rc = crud.recommend_calories(today)
         p, c, f = (diet.protein_g or 0), (diet.carbs_g or 0), (diet.fat_g or 0)
         bal = lambda left: f"还可吃 {round(left)}" if round(left) >= 0 else f"超 {-round(left)}"
         protein_status = "达标 ✅" if p >= rc["protein_g"] else f"还需 {round(rc['protein_g'] - p)}"
@@ -921,14 +953,54 @@ def _build_today_summary(today: date) -> str:
         lines.append(
             f"🎯 今日推荐摄入：{rc['low']}–{rc['high']} kcal"
             f"（静态 {rc['bmr']} + 运动回补 {rc['active_counted']}"
-            f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 300~500）\n"
+            f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 {rc['target_deficit']}"
+            f"〔{rc['monthly_goal']:g}kg/月〕）\n"
             f"🥩 蛋白质 {rc['protein_g']}g | 🍚 碳水 {rc['carbs_g']}g | 🧈 脂肪 {rc['fat_g']}g\n\n"
             "今天的数据还没同步。\n"
             "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。"
         )
 
+    lines.append("\n" + _refeed_bank_line(crud.refeed_status(today)))
+
     if body:
-        lines.append(f"\n⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")
+        lines.append(f"⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")
+
+    return "\n".join(lines)
+
+
+def _build_month_summary(today: date) -> str:
+    month_start = today.replace(day=1)
+    summaries = crud.get_daily_summaries_range(month_start, today)
+    tracked = [s for s in summaries if (s.total_calories_in or 0) > 0]
+
+    lines = [f"📅 本月汇总（{today:%Y-%m}）\n"]
+    if tracked:
+        total_deficit = sum(s.calorie_deficit or 0 for s in summaries)
+        avg_cal = sum(s.total_calories_in or 0 for s in tracked) / len(tracked)
+        avg_deficit = total_deficit / len(tracked)
+        protein_days = sum(1 for s in summaries if s.protein_achievement_pct and s.protein_achievement_pct >= 90)
+        lines += [
+            f"📆 已记录 {len(tracked)} 天",
+            f"🔥 日均摄入：{avg_cal:.0f} kcal",
+            f"📉 累计缺口：{total_deficit:.0f} kcal（≈ {total_deficit / 7700:.2f} kg 脂肪）",
+            f"📉 日均缺口：{avg_deficit:.0f} kcal",
+            f"🥩 蛋白质达标：{protein_days}/{len(tracked)} 天",
+        ]
+    else:
+        lines.append("本月还没有数据。")
+
+    bcs = [b for b in crud.get_body_compositions_range(month_start, today) if b.weight_kg]
+    if bcs:
+        lines.append(f"\n⚖️ 本月体重：{bcs[0].weight_kg} → {bcs[-1].weight_kg} kg（{bcs[-1].weight_kg - bcs[0].weight_kg:+.1f}）")
+
+    st = crud.refeed_status(today)
+    if st["current_min"] is not None:
+        lines += [
+            f"🏆 历史最低体重：{st['current_min']} kg",
+            "\n🔁 Refeed",
+            f"🎖️ 可用：{st['available']} 天（无上限，可囤积）",
+            f"🎯 下一个：降到 {st['next_low']} kg（还需 {st['to_next_kg']} kg）",
+        ]
 
     return "\n".join(lines)
 
@@ -982,7 +1054,6 @@ async def _generate_report() -> str:
     start = today - timedelta(days=6)
     diet_records = crud.get_diet_records_range(start, today)
     body_records = crud.get_body_compositions_range(start, today)
-    workout_records = crud.get_workouts_range(start, today)
 
     bmr = crud.get_bmr()
 
@@ -1006,7 +1077,6 @@ async def _generate_report() -> str:
             }
             for r in body_records
         ],
-        "workout_records": [{"date": str(r.date), "type": r.workout_type} for r in workout_records],
     }
 
     return await analyst.generate_weekly_report(user_data)

@@ -7,8 +7,8 @@ load_dotenv()
 from telegram import BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from bot.handlers import (
-    cmd_start, cmd_today, cmd_week, cmd_body, cmd_workout, cmd_report,
-    cmd_profile, cmd_update, cmd_stats, cmd_mode, cmd_server, _server_watch,
+    cmd_start, cmd_today, cmd_week, cmd_body, cmd_month, cmd_report,
+    cmd_profile, cmd_update, cmd_stats, cmd_calibrate, cmd_mode, cmd_server, _server_watch,
     cmd_food, handle_photo, handle_text, handle_document, handle_callback,
 )
 
@@ -18,10 +18,11 @@ _COMMANDS = [
     BotCommand("food", "🍎 记食物（扫条码 / 文字描述）"),
     BotCommand("today", "今日数据"),
     BotCommand("week", "本周汇总"),
+    BotCommand("month", "本月汇总"),
     BotCommand("body", "身体成分"),
-    BotCommand("workout", "训练记录"),
     BotCommand("stats", "体重统计"),
     BotCommand("profile", "个人资料 / BMR"),
+    BotCommand("calibrate", "校准 eatback 系数"),
     BotCommand("report", "生成周报"),
     BotCommand("mode", "切换对话模式"),
 ]
@@ -52,11 +53,12 @@ def main() -> None:
     app.add_handler(CommandHandler("nutrition", cmd_food))  # alias
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("body", cmd_body))
-    app.add_handler(CommandHandler("workout", cmd_workout))
+    app.add_handler(CommandHandler("month", cmd_month))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("calibrate", cmd_calibrate))
     app.add_handler(CommandHandler("mode", cmd_mode))
     app.add_handler(CommandHandler("server", cmd_server))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

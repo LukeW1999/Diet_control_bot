@@ -7,7 +7,8 @@ MODE_LABELS = {
 }
 
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(refeed_on: bool = False) -> InlineKeyboardMarkup:
+    refeed_label = "🔁 Refeed 日：开 ✅（点关）" if refeed_on else "🔁 Refeed 日：关（点开）"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("今日数据", callback_data="today"),
@@ -15,10 +16,11 @@ def main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("身体成分", callback_data="body"),
-            InlineKeyboardButton("训练记录", callback_data="workout"),
+            InlineKeyboardButton("本月汇总", callback_data="month"),
         ],
         [InlineKeyboardButton("生成周报", callback_data="report")],
         [InlineKeyboardButton("🍎 记食物（扫码/描述）", callback_data="food_on")],
+        [InlineKeyboardButton(refeed_label, callback_data="refeed_toggle")],
     ])
 
 

@@ -105,6 +105,7 @@ class DailySummary(Base):
     protein_achievement_pct = Column(Float)
 
     weight_kg = Column(Float)
+    is_refeed = Column(Integer, default=0)  # 1 = refeed day → recommend maintenance
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -129,6 +130,8 @@ class UserProfile(Base):
     gender = Column(String, default="male")   # male / female
     weight_goal_kg = Column(Float)
     protein_goal_per_kg = Column(Float)
+    refeed_bonus_notified = Column(Integer, default=0)  # last-celebrated earned count
+    refeed_weight_baseline = Column(Float)  # anchor weight; new lows below it earn refeeds
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
