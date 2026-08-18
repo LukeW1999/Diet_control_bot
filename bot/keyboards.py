@@ -44,3 +44,16 @@ def food_library_menu(items: list) -> InlineKeyboardMarkup:
             label += f" · 上次{it.last_grams:g}g"
         rows.append([InlineKeyboardButton(label[:60], callback_data=f"food_pick:{it.id}")])
     return InlineKeyboardMarkup(rows)
+
+
+# Where Luke actually goes. Anything else is reachable with "/tz Area/City".
+TZ_PRESETS = [("🇬🇧 英国", "Europe/London"),
+              ("🇸🇬 新加坡", "Asia/Singapore"),
+              ("🇨🇳 中国", "Asia/Shanghai")]
+
+
+def tz_menu(current: str) -> InlineKeyboardMarkup:
+    def btn(label: str, zone: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(("✅ " if zone == current else "") + label,
+                                    callback_data=f"tz_set:{zone}")
+    return InlineKeyboardMarkup([[btn(l, z) for l, z in TZ_PRESETS]])

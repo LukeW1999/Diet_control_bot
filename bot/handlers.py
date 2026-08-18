@@ -3,7 +3,9 @@ import json
 import logging
 import os
 import re
+import time as _time
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import available_timezones
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -11,7 +13,7 @@ from telegram.ext import ContextTypes
 from db import crud
 from llm import analyst
 from utils.media_store import save_document as _media_save_doc
-from .keyboards import main_menu, mode_menu, food_library_menu, MODE_LABELS
+from .keyboards import main_menu, mode_menu, food_library_menu, tz_menu, MODE_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +458,49 @@ def _arm_from_library(item) -> str:
     return text
 
 
+def _current_tz() -> str:
+    try:
+        return open("/etc/timezone").read().strip()
+    except OSError:
+        return _time.tzname[0]
+
+
+def _set_timezone(zone: str) -> str:
+    """Move the whole box, not just this process: cron drives the morning report
+    and `date.today()` decides which day a meal lands on, so both have to follow."""
+    if zone not in available_timezones():
+        return f"没有 {zone} 这个时区。用 IANA 名称，如 Asia/Singapore、Asia/Shanghai。"
+    try:
+        _subprocess.run(["timedatectl", "set-timezone", zone], check=True, timeout=15)
+        # cron caches the zone at start; without this the morning report keeps firing
+        # on the old local hour.
+        _subprocess.run(["systemctl", "restart", "cron"], check=False, timeout=15)
+    except Exception as e:
+        return f"切换失败：{e}"
+    # A running process holds its own copy until told to re-read.
+    _time.tzset()
+    return (f"✅ 已切到 {zone}\n"
+            f"当前本地时间：{datetime.now():%Y-%m-%d %H:%M}\n"
+            "早报、笔记提醒、周报都已按新时区重排，日期边界立即生效。")
+
+
+def _tz_status() -> str:
+    return (f"🕐 当前时区：{_current_tz()}\n"
+            f"本地时间：{datetime.now():%Y-%m-%d %H:%M}\n\n"
+            "切换会同时影响定时任务的触发时刻和「今天」的日期边界。\n"
+            "其他地方用 /tz Area/City，如 /tz Asia/Tokyo。")
+
+
+async def cmd_tz(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Switch the server's timezone when you travel."""
+    if not _allowed(update):
+        return
+    if ctx.args:
+        await update.message.reply_text(_set_timezone(ctx.args[0].strip()))
+        return
+    await update.message.reply_text(_tz_status(), reply_markup=tz_menu(_current_tz()))
+
+
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
@@ -849,6 +894,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
             await query.edit_message_text("这条记录已经不在食物库里了。")
             return
         await query.edit_message_text(_arm_from_library(item))
+        return
+
+    if data.startswith("tz_set:"):
+        await query.edit_message_text(_set_timezone(data.split(":", 1)[1]))
         return
 
     if data.startswith("set_mode:"):
