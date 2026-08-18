@@ -4,7 +4,8 @@ import os
 from datetime import date, datetime, timedelta
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
-from .models import Base, DietRecord, BodyComposition, DailySummary, DiaryEntry, UserProfile
+from .models import (Base, DietRecord, BodyComposition, DailySummary, DiaryEntry,
+                     FoodLibraryItem, UserProfile)
 from utils.food_log import write_entry as write_food_log
 
 
@@ -558,3 +559,45 @@ def _parse_date(d) -> date:
     if isinstance(d, str):
         return date.fromisoformat(d[:10])
     return date.today()
+
+
+# ── food library ──────────────────────────────────────────────────────────────
+def remember_food(prod: dict) -> None:
+    """Save (or refresh) a scanned product. Keeps use_count across a re-scan."""
+    with _session() as s:
+        item = s.scalar(select(FoodLibraryItem).where(FoodLibraryItem.barcode == prod["code"]))
+        if item is None:
+            item = FoodLibraryItem(barcode=prod["code"], use_count=0)
+            s.add(item)
+        item.name = prod["name"]
+        item.brand = prod.get("brand") or None
+        item.serving_g = prod.get("serving_g")
+        item.canon_json = json.dumps(prod["canon"])
+        s.commit()
+
+
+def record_food_use(barcode: str, grams: float) -> None:
+    with _session() as s:
+        item = s.scalar(select(FoodLibraryItem).where(FoodLibraryItem.barcode == barcode))
+        if item is None:
+            return
+        item.last_grams = grams
+        item.use_count = (item.use_count or 0) + 1
+        item.last_used = datetime.utcnow()
+        s.commit()
+
+
+def get_food_library(keyword: str = "", limit: int = 12) -> list[FoodLibraryItem]:
+    """Most-used first, then most recent. Filters on name/brand when given a keyword."""
+    with _session() as s:
+        q = select(FoodLibraryItem)
+        if keyword:
+            like = f"%{keyword}%"
+            q = q.where(FoodLibraryItem.name.ilike(like) | FoodLibraryItem.brand.ilike(like))
+        q = q.order_by(desc(FoodLibraryItem.use_count), desc(FoodLibraryItem.last_used)).limit(limit)
+        return list(s.scalars(q))
+
+
+def get_food_item(item_id: int) -> FoodLibraryItem | None:
+    with _session() as s:
+        return s.get(FoodLibraryItem, item_id)

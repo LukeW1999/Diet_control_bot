@@ -20,6 +20,7 @@ def main_menu(refeed_on: bool = False) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("生成周报", callback_data="report")],
         [InlineKeyboardButton("🍎 记食物（扫码/描述）", callback_data="food_on")],
+        [InlineKeyboardButton("📚 食物库", callback_data="food_lib")],
         [InlineKeyboardButton(refeed_label, callback_data="refeed_toggle")],
     ])
 
@@ -31,3 +32,15 @@ def mode_menu(current: str) -> InlineKeyboardMarkup:
             label = "✅ " + label
         return InlineKeyboardButton(label, callback_data=f"set_mode:{mode}")
     return InlineKeyboardMarkup([[btn("auto"), btn("coach"), btn("chat")]])
+
+
+def food_library_menu(items: list) -> InlineKeyboardMarkup:
+    """One button per saved product; the label carries the last amount eaten so a
+    repeat log is a single tap away."""
+    rows = []
+    for it in items:
+        label = it.name if not it.brand else f"{it.name}（{it.brand}）"
+        if it.last_grams:
+            label += f" · 上次{it.last_grams:g}g"
+        rows.append([InlineKeyboardButton(label[:60], callback_data=f"food_pick:{it.id}")])
+    return InlineKeyboardMarkup(rows)

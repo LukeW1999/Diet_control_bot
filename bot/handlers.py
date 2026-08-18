@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 from db import crud
 from llm import analyst
 from utils.media_store import save_document as _media_save_doc
-from .keyboards import main_menu, mode_menu, MODE_LABELS
+from .keyboards import main_menu, mode_menu, food_library_menu, MODE_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,13 @@ _CONV_LOG = os.path.join(os.path.dirname(__file__), "..", "data", "conversation_
 # Food logging state. Armed by the 🍎 button or /food; then a barcode photo
 # (→ Open Food Facts) or a text description (→ Qwen + web search) is logged as food.
 # After a barcode lookup, `canon` holds per-100g facts while we wait for grams.
-_food: dict = {"armed": False, "canon": None, "name": None, "serving_g": None}
+_food: dict = {"armed": False, "canon": None, "name": None, "serving_g": None,
+               "barcode": None}
 
 
 def _food_reset() -> None:
-    _food.update({"armed": False, "canon": None, "name": None, "serving_g": None})
+    _food.update({"armed": False, "canon": None, "name": None, "serving_g": None,
+                  "barcode": None})
 
 # The single reusable "panel" bubble for summaries (/today, /week, … and the menu
 # buttons). Kept as ONE bubble that always floats to the bottom: each refresh
@@ -412,12 +414,46 @@ async def cmd_food(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Arm food logging from the / menu: next barcode photo or text is logged as food."""
     if not _allowed(update):
         return
-    _food.update({"armed": True, "canon": None, "name": None, "serving_g": None})
+    _food.update({"armed": True, "canon": None, "name": None, "serving_g": None,
+                  "barcode": None})
     await update.message.reply_text(
         "🍎 记食物已就绪。\n"
         "· 拍一张商品条码照片 → 我查 Open Food Facts，再问你吃了多少克\n"
         "· 或直接文字描述（如「一个巨无霸」「两个水煮蛋」）→ 我联网估算热量"
     )
+
+
+def _library_view(keyword: str = "") -> tuple[str, object]:
+    """Text + button list for the saved-product library."""
+    items = crud.get_food_library(keyword)
+    if not items:
+        miss = f"食物库里没有匹配「{keyword}」的东西。" if keyword else \
+            "食物库还是空的。扫一次条码，之后就会出现在这里。"
+        return miss, None
+    head = f"📚 食物库（{'搜索：' + keyword if keyword else '常用在前'}）\n点一下直接记，然后回克数："
+    return head, food_library_menu(items)
+
+
+async def cmd_foods(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pick a previously scanned product instead of digging the packet out again."""
+    if not _allowed(update):
+        return
+    text, markup = _library_view(" ".join(ctx.args) if ctx.args else "")
+    await update.message.reply_text(text, reply_markup=markup)
+
+
+def _arm_from_library(item) -> str:
+    """Load a saved product into the pending-food slot and ask for the amount."""
+    from llm.nutrition import format_off_prompt
+    canon = json.loads(item.canon_json)
+    _food.update({"armed": True, "canon": canon, "name": item.name,
+                  "serving_g": item.serving_g, "barcode": item.barcode})
+    prod = {"name": item.name, "brand": item.brand or "",
+            "serving_g": item.serving_g, "canon": canon}
+    text = format_off_prompt(prod)
+    if item.last_grams:
+        text += f"\n（上次吃了 {item.last_grams:g}g）"
+    return text
 
 
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -511,8 +547,9 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     "直接文字描述这个食物，我联网估算。"
                 )
                 return  # stay armed for a text description
-            _food.update({"armed": True, "canon": prod["canon"],
-                          "name": prod["name"], "serving_g": prod.get("serving_g")})
+            crud.remember_food(prod)
+            _food.update({"armed": True, "canon": prod["canon"], "name": prod["name"],
+                          "serving_g": prod.get("serving_g"), "barcode": prod["code"]})
             await wait_msg.edit_text(format_off_prompt(prod))
             _log_event({"type": "barcode", "code": code, "name": prod["name"]})
         except Exception as e:
@@ -549,8 +586,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if m:
                 grams = float(m.group(1))
         if grams is not None:
-            canon = _food["canon"]
+            canon, barcode = _food["canon"], _food["barcode"]
             _food_reset()
+            if barcode:
+                crud.record_food_use(barcode, grams)
             scaled = scale_to_grams(canon, grams)
             await update.message.reply_text(format_scaled(scaled))
             _log_event({"type": "food_scaled", "grams": grams, "healthkit": scaled})
@@ -782,12 +821,26 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
 
     if data == "food_on":
-        _food.update({"armed": True, "canon": None, "name": None, "serving_g": None})
+        _food.update({"armed": True, "canon": None, "name": None, "serving_g": None,
+                  "barcode": None})
         await query.edit_message_text(
             "🍎 记食物已就绪。\n"
             "· 拍一张商品条码照片 → 查 Open Food Facts，再问你吃了多少克\n"
             "· 或直接文字描述（如「一个巨无霸」）→ 联网估算热量"
         )
+        return
+
+    if data == "food_lib":
+        text, markup = _library_view()
+        await query.edit_message_text(text, reply_markup=markup)
+        return
+
+    if data.startswith("food_pick:"):
+        item = crud.get_food_item(int(data.split(":")[1]))
+        if item is None:
+            await query.edit_message_text("这条记录已经不在食物库里了。")
+            return
+        await query.edit_message_text(_arm_from_library(item))
         return
 
     if data.startswith("set_mode:"):

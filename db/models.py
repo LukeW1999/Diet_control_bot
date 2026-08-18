@@ -121,6 +121,25 @@ class DiaryEntry(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class FoodLibraryItem(Base):
+    """A product you have scanned before, kept so it can be logged again without
+    the packet in hand: the per-100g facts are exactly what Open Food Facts gave
+    us, so re-logging costs no network call and no LLM call."""
+    __tablename__ = "food_library"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    barcode = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    brand = Column(String)
+    serving_g = Column(Float)
+    canon_json = Column(Text, nullable=False)  # per-100g, llm.foodsearch canonical shape
+
+    last_grams = Column(Float)  # offered as the default next time
+    use_count = Column(Integer, default=0)
+    last_used = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class UserProfile(Base):
     __tablename__ = "user_profile"
 
