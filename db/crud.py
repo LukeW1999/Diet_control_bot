@@ -215,6 +215,10 @@ def apply_correction(table: str, field: str, value, record_date: date) -> bool:
             rec = session.scalar(select(DietRecord).where(DietRecord.date == record_date))
             if rec and hasattr(rec, field):
                 setattr(rec, field, value)
+                # Every stat reads DailySummary, so a correction that only touched
+                # the DietRecord would leave /week, /stats and /calibrate quoting
+                # the deficit from before the fix.
+                _update_daily_summary_from_diet(session, rec)
                 session.commit()
                 return True
     return False
