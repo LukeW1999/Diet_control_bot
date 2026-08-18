@@ -122,13 +122,14 @@ class DiaryEntry(Base):
 
 
 class FoodLibraryItem(Base):
-    """A product you have scanned before, kept so it can be logged again without
-    the packet in hand: the per-100g facts are exactly what Open Food Facts gave
-    us, so re-logging costs no network call and no LLM call."""
+    """A food you have logged before, held as per-100g facts so it can be logged
+    again at any weight. Barcode entries carry Open Food Facts numbers exactly;
+    text entries are kept only when you stated the weight yourself, which is what
+    makes the per-100g basis trustworthy enough to rescale."""
     __tablename__ = "food_library"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    barcode = Column(String, unique=True, nullable=False, index=True)
+    barcode = Column(String, unique=True, index=True)  # null for text-derived entries
     name = Column(String, nullable=False)
     brand = Column(String)
     serving_g = Column(Float)

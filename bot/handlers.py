@@ -23,12 +23,12 @@ _CONV_LOG = os.path.join(os.path.dirname(__file__), "..", "data", "conversation_
 # (→ Open Food Facts) or a text description (→ Qwen + web search) is logged as food.
 # After a barcode lookup, `canon` holds per-100g facts while we wait for grams.
 _food: dict = {"armed": False, "canon": None, "name": None, "serving_g": None,
-               "barcode": None}
+               "item_id": None}
 
 
 def _food_reset() -> None:
     _food.update({"armed": False, "canon": None, "name": None, "serving_g": None,
-                  "barcode": None})
+                  "item_id": None})
 
 # The single reusable "panel" bubble for summaries (/today, /week, … and the menu
 # buttons). Kept as ONE bubble that always floats to the bottom: each refresh
@@ -415,7 +415,7 @@ async def cmd_food(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
     _food.update({"armed": True, "canon": None, "name": None, "serving_g": None,
-                  "barcode": None})
+                  "item_id": None})
     await update.message.reply_text(
         "🍎 记食物已就绪。\n"
         "· 拍一张商品条码照片 → 我查 Open Food Facts，再问你吃了多少克\n"
@@ -447,7 +447,7 @@ def _arm_from_library(item) -> str:
     from llm.nutrition import format_off_prompt
     canon = json.loads(item.canon_json)
     _food.update({"armed": True, "canon": canon, "name": item.name,
-                  "serving_g": item.serving_g, "barcode": item.barcode})
+                  "serving_g": item.serving_g, "item_id": item.id})
     prod = {"name": item.name, "brand": item.brand or "",
             "serving_g": item.serving_g, "canon": canon}
     text = format_off_prompt(prod)
@@ -547,9 +547,12 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     "直接文字描述这个食物，我联网估算。"
                 )
                 return  # stay armed for a text description
-            crud.remember_food(prod)
+            crud.remember_food(prod["name"], prod["canon"], barcode=prod["code"],
+                               brand=prod.get("brand"), serving_g=prod.get("serving_g"))
+            saved = crud.find_food(prod["name"], prod["code"])
             _food.update({"armed": True, "canon": prod["canon"], "name": prod["name"],
-                          "serving_g": prod.get("serving_g"), "barcode": prod["code"]})
+                          "serving_g": prod.get("serving_g"),
+                          "item_id": saved.id if saved else None})
             await wait_msg.edit_text(format_off_prompt(prod))
             _log_event({"type": "barcode", "code": code, "name": prod["name"]})
         except Exception as e:
@@ -586,10 +589,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if m:
                 grams = float(m.group(1))
         if grams is not None:
-            canon, barcode = _food["canon"], _food["barcode"]
+            canon, item_id = _food["canon"], _food["item_id"]
             _food_reset()
-            if barcode:
-                crud.record_food_use(barcode, grams)
+            if item_id:
+                crud.record_food_use(item_id, grams)
             scaled = scale_to_grams(canon, grams)
             await update.message.reply_text(format_scaled(scaled))
             _log_event({"type": "food_scaled", "grams": grams, "healthkit": scaled})
@@ -603,9 +606,14 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         wait = await update.message.reply_text("🍎 联网估算中...")
         try:
             from llm.foodsearch import estimate_food_text
-            from llm.nutrition import format_estimate
+            from llm.nutrition import format_estimate, per_100g_from_estimate
             est = await estimate_food_text(text)
-            await wait.edit_text(format_estimate(est))
+            reply = format_estimate(est)
+            keep = per_100g_from_estimate(est, text)
+            if keep:
+                crud.remember_food(*keep)
+                reply += f"\n📚 已存入食物库（{keep[0]}），下次 /foods 直接选"
+            await wait.edit_text(reply)
             _log_event({"type": "food_estimate", "text": text, "healthkit": est})
         except Exception as e:
             logger.exception("food estimate failed")
@@ -822,7 +830,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "food_on":
         _food.update({"armed": True, "canon": None, "name": None, "serving_g": None,
-                  "barcode": None})
+                  "item_id": None})
         await query.edit_message_text(
             "🍎 记食物已就绪。\n"
             "· 拍一张商品条码照片 → 查 Open Food Facts，再问你吃了多少克\n"

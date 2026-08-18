@@ -7,6 +7,7 @@ link, and the Telegram reply formatting. No LLM vision here — labels are read
 via barcode now.
 """
 import json
+import re
 import urllib.parse
 
 
@@ -56,6 +57,45 @@ def scale_to_grams(canon: dict, grams: float) -> dict:
         "sugar_g": s("sugars"),
         "sodium_mg": sodium,
     }
+
+
+def per_100g_from_estimate(est: dict, description: str) -> tuple[str, dict] | None:
+    """(name, canon) for an estimate safe to rescale later, else None.
+
+    Only a single food whose weight YOU stated qualifies: the model's own portion
+    guess can be far out (it read a 12-inch pizza as 300g), and dividing by a bad
+    weight would bake that error into every future log. Requiring the model's
+    grams to match a number in your own words is what rules that out.
+    """
+    items = est.get("items") or []
+    if len(items) != 1:
+        return None  # a meal is not a thing you can re-log by weight
+    grams = _grams_in(items[0].get("portion", ""))
+    if not grams or grams not in _all_grams(description):
+        return None
+    f = 100.0 / grams
+    per = lambda k: round(est[k] * f, 2) if _num(est.get(k)) else None
+    sodium = est.get("sodium_mg")
+    return items[0].get("name") or description[:40], {
+        "energy_kcal": [per("dietary_energy_kcal"), None],
+        "protein": [per("protein_g"), None],
+        "carbs": [per("carbs_g"), None],
+        "sugars": [per("sugar_g"), None],
+        "fat": [per("fat_g"), None],
+        "saturates": [None, None],
+        "fibre": [per("fiber_g"), None],
+        # scale_to_grams works from salt; 1g salt = 400mg sodium.
+        "salt": [round(sodium * f / 400, 3) if _num(sodium) else None, None],
+    }
+
+
+def _grams_in(text: str) -> float | None:
+    m = re.search(r"([0-9.]+)\s*(?:g|克|ml|毫升)", text)
+    return float(m.group(1)) if m else None
+
+
+def _all_grams(text: str) -> set:
+    return {float(g) for g in re.findall(r"([0-9.]+)\s*(?:g|克|ml|毫升)", text)}
 
 
 # ── formatting ──────────────────────────────────────────────────────────────────

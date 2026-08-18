@@ -562,23 +562,31 @@ def _parse_date(d) -> date:
 
 
 # ── food library ──────────────────────────────────────────────────────────────
-def remember_food(prod: dict) -> None:
-    """Save (or refresh) a scanned product. Keeps use_count across a re-scan."""
+def remember_food(name: str, canon: dict, barcode: str = None,
+                  brand: str = None, serving_g: float = None) -> None:
+    """Save (or refresh) a per-100g food. Keeps use_count when it is already known.
+
+    Barcode entries are identified by their code; text-derived ones have no code,
+    so they are matched on name to stop the same yoghurt piling up every time it
+    is logged at a different weight.
+    """
     with _session() as s:
-        item = s.scalar(select(FoodLibraryItem).where(FoodLibraryItem.barcode == prod["code"]))
+        where = (FoodLibraryItem.barcode == barcode) if barcode else (
+            (FoodLibraryItem.barcode.is_(None)) & (FoodLibraryItem.name == name))
+        item = s.scalar(select(FoodLibraryItem).where(where))
         if item is None:
-            item = FoodLibraryItem(barcode=prod["code"], use_count=0)
+            item = FoodLibraryItem(barcode=barcode, use_count=0)
             s.add(item)
-        item.name = prod["name"]
-        item.brand = prod.get("brand") or None
-        item.serving_g = prod.get("serving_g")
-        item.canon_json = json.dumps(prod["canon"])
+        item.name = name
+        item.brand = brand or None
+        item.serving_g = serving_g
+        item.canon_json = json.dumps(canon)
         s.commit()
 
 
-def record_food_use(barcode: str, grams: float) -> None:
+def record_food_use(item_id: int, grams: float) -> None:
     with _session() as s:
-        item = s.scalar(select(FoodLibraryItem).where(FoodLibraryItem.barcode == barcode))
+        item = s.get(FoodLibraryItem, item_id)
         if item is None:
             return
         item.last_grams = grams
@@ -601,3 +609,10 @@ def get_food_library(keyword: str = "", limit: int = 12) -> list[FoodLibraryItem
 def get_food_item(item_id: int) -> FoodLibraryItem | None:
     with _session() as s:
         return s.get(FoodLibraryItem, item_id)
+
+
+def find_food(name: str, barcode: str = None) -> FoodLibraryItem | None:
+    with _session() as s:
+        where = (FoodLibraryItem.barcode == barcode) if barcode else (
+            (FoodLibraryItem.barcode.is_(None)) & (FoodLibraryItem.name == name))
+        return s.scalar(select(FoodLibraryItem).where(where))
