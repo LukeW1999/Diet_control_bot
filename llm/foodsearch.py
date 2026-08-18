@@ -2,8 +2,8 @@
 
 1. lookup_barcode()  — scan a barcode → Open Food Facts → per-100g facts.
    (OFF terms: 1 API call = 1 real scan; we send a User-Agent as they ask.)
-2. estimate_food_text() — free-text description → Qwen with web search →
-   estimated total nutrition for the portion described.
+2. estimate_food_text() — free-text description → Qwen itemises it →
+   per-item nutrition, summed here into the portion's total.
 
 Both return data in the canonical shapes used by llm.nutrition so the rest of
 the pipeline (scale to grams, HealthKit link, formatting) is shared.
@@ -102,44 +102,61 @@ async def lookup_barcode(code: str) -> dict | None:
     }
 
 
-_ESTIMATE_SYSTEM = """你是营养估算助手。用户用自然语言描述了他吃的食物（通常已含数量或份量）。
-请结合联网搜索，估算「用户描述的这一份」的**总**营养（不是每100g）。只返回 JSON，别加解释文字。
+_ESTIMATE_SYSTEM = """你是营养估算助手。用户用自然语言描述了他吃的食物，可能包含多样食物。
+请逐项拆解，对每一项分别估算营养。只返回 JSON，别加解释文字。
 
 返回格式：
 {
-  "food": "食物名称（简短）",
-  "assumed_portion": "你假设的份量，如「1个巨无霸约219g」",
-  "energy_kcal": 数字,
-  "protein_g": 数字,
-  "carbs_g": 数字,
-  "fat_g": 数字,
-  "sugar_g": 数字或null,
-  "fiber_g": 数字或null,
-  "sodium_mg": 数字或null,
+  "items": [
+    {
+      "name": "食物名称（简短）",
+      "portion": "这一项的份量，如「150g」「1个约50g」",
+      "energy_kcal": 数字,
+      "protein_g": 数字,
+      "carbs_g": 数字,
+      "fat_g": 数字,
+      "sugar_g": 数字或null,
+      "fiber_g": 数字或null,
+      "sodium_mg": 数字或null
+    }
+  ],
   "note": "一句话说明估算依据/不确定性"
 }
 
 规则：
-- 所有营养值是「用户这一份」的合计，已按描述的数量放大。
+- 用户描述里的每一样食物都要单独成为一个 item，不要合并成一项。
+- 每一项的数值是「该项这个份量」的合计，已按描述的数量放大，不是每100g。
+- 不要自己计算总和，也不要返回 total 字段，合计由程序计算。
 - 数字只填数值，别带单位。拿不准的字段填 null。
-- 找不到确切数据时，用同类食物的常见值估，并在 note 里说明。"""
+- 用户没写重量时，在 portion 里写明你假设的克数，并在 note 里说明这是假设。"""
+
+
+def _sum(items: list[dict], key: str) -> float | None:
+    """Sum one nutrient across items, keeping None when no item reported it."""
+    present = [v for v in (_n(i.get(key)) for i in items) if v is not None]
+    return round(sum(present), 1) if present else None
 
 
 async def estimate_food_text(description: str) -> dict:
-    """Estimate total nutrition for a free-text food description via Qwen + web search."""
-    raw = await text_call(_ESTIMATE_SYSTEM, description, search=True)
-    data = extract_json(raw)
-    # Normalise to the HealthKit dict shape used by nutrition.healthkit_link/format.
+    """Estimate nutrition for a free-text description. The model itemises and the
+    totals are summed here: asked for a single flat total it under-counts a
+    multi-food meal by about 12%."""
+    data = extract_json(await text_call(_ESTIMATE_SYSTEM, description))
+    items = [i for i in data.get("items", []) if isinstance(i, dict)]
     return {
-        "food": data.get("food") or description[:40],
-        "assumed_portion": data.get("assumed_portion") or "",
+        "food": items[0].get("name", "") if len(items) == 1 else f"{len(items)} 项",
+        "items": [
+            {"name": i.get("name", ""), "portion": i.get("portion", ""),
+             "energy_kcal": _n(i.get("energy_kcal"))}
+            for i in items
+        ],
         "note": data.get("note") or "",
-        "dietary_energy_kcal": _n(data.get("energy_kcal")),
-        "protein_g": _n(data.get("protein_g")),
-        "carbs_g": _n(data.get("carbs_g")),
-        "fat_g": _n(data.get("fat_g")),
-        "sugar_g": _n(data.get("sugar_g")),
-        "fiber_g": _n(data.get("fiber_g")),
-        "sodium_mg": _n(data.get("sodium_mg")),
+        "dietary_energy_kcal": _sum(items, "energy_kcal"),
+        "protein_g": _sum(items, "protein_g"),
+        "carbs_g": _sum(items, "carbs_g"),
+        "fat_g": _sum(items, "fat_g"),
+        "sugar_g": _sum(items, "sugar_g"),
+        "fiber_g": _sum(items, "fiber_g"),
+        "sodium_mg": _sum(items, "sodium_mg"),
         "saturated_fat_g": None,
     }

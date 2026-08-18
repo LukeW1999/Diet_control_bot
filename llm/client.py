@@ -25,7 +25,6 @@ async def text_call(
     model: str = None,
     history: list[dict] | None = None,
     thinking: bool = False,
-    search: bool = False,
 ) -> str:
     client = get_client()
     model = model or os.getenv("QWEN_TEXT_MODEL", "qwen3.6-plus")
@@ -35,10 +34,8 @@ async def text_call(
         messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
-    extra: dict = {"enable_thinking": bool(thinking)}
-    if search:
-        extra["enable_search"] = True  # DashScope web search for grounded answers
-    kwargs: dict = dict(model=model, messages=messages, extra_body=extra)
+    kwargs: dict = dict(model=model, messages=messages,
+                        extra_body={"enable_thinking": bool(thinking)})
     kwargs["temperature"] = 1.0 if thinking else 0.7
 
     logger.debug("[LLM] model=%s thinking=%s prompt_head=%.80s", model, thinking, user_text)

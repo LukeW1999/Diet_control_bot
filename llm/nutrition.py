@@ -1,9 +1,10 @@
 """Shared nutrition math + formatting.
 
 Data comes from two sources (see llm.foodsearch): a barcode → Open Food Facts
-(per-100g, canonical shape) or a free-text estimate from Qwen. This module owns
-the pieces they share: scale-per-100g-to-grams, the HealthKit write link, and the
-Telegram reply formatting. No LLM vision here — labels are read via barcode now.
+(per-100g, canonical shape) or an itemised free-text estimate from Qwen. This
+module owns the pieces they share: scale-per-100g-to-grams, the HealthKit write
+link, and the Telegram reply formatting. No LLM vision here — labels are read
+via barcode now.
 """
 import json
 import urllib.parse
@@ -94,12 +95,12 @@ def format_scaled(scaled: dict) -> str:
 
 
 def format_estimate(est: dict) -> str:
-    """Free-text estimate (Qwen + search): show the assumed portion + a HealthKit link."""
-    lines = [f"🍎 {est['food']}（联网估算）"]
-    if est.get("assumed_portion"):
-        lines.append(f"份量：{est['assumed_portion']}")
+    """Free-text estimate: per-item breakdown, then the summed total + HealthKit link."""
+    lines = [f"🍎 {est['food']}（估算）"]
+    for i in est.get("items", []):
+        lines.append(f"　• {i['name']} {i['portion']}　{_f(i.get('energy_kcal'))} kcal")
     lines += [
-        f"🔥 {_f(est.get('dietary_energy_kcal'))} kcal",
+        f"🔥 合计 {_f(est.get('dietary_energy_kcal'))} kcal",
         f"🥩 蛋白 {_f(est.get('protein_g'),'g')}　🍞 碳水 {_f(est.get('carbs_g'),'g')}　🧈 脂肪 {_f(est.get('fat_g'),'g')}",
     ]
     if est.get("note"):
