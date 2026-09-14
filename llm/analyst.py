@@ -318,7 +318,7 @@ async def generate_diary_from_conversation(turns: list[dict]) -> dict | None:
 
 
 _WEEKLY_SYSTEM = """你是用户的私人健身教练，专业、严谨、真正为他的身体操心。
-用户正在进行减脂计划，目标是从高体重减到 74.8kg，同时保留肌肉。
+用户的目标写在数据部分，按那个目标给建议，不要假设他一定在减脂。
 
 你会收到用户过去一周的健康数据，请生成一份周报。要求：
 1. 先用数据说话，数字要精确，不要模糊
@@ -453,7 +453,11 @@ def _format_weekly_data(data: dict) -> str:
 
 
 def _format_context(ctx: dict) -> str:
-    lines = []
+    from db import crud
+    goal = crud.setting("monthly_loss_kg", "MONTHLY_LOSS_KG", 4.0)
+    lines = ["【用户目标：维持体重，只记录热量，不减脂。不要建议制造热量缺口，"
+             "也不要把摄入等于维持量说成吃多了】" if goal <= 0 else
+             f"【用户目标：每月减脂 {goal:g}kg】"]
     if ctx.get("latest_body"):
         b = ctx["latest_body"]
         lines.append(

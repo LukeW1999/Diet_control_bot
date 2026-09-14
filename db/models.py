@@ -152,6 +152,7 @@ class UserProfile(Base):
     protein_goal_per_kg = Column(Float)
     monthly_loss_kg = Column(Float)
     active_eatback_pct = Column(Float)
+    activity_factor = Column(Float)  # BMR multiplier when no tracker reports activity
     refeed_bonus_notified = Column(Integer, default=0)  # last-celebrated earned count
     refeed_weight_baseline = Column(Float)  # anchor weight; new lows below it earn refeeds
     updated_at = Column(DateTime, default=datetime.utcnow)

@@ -1011,7 +1011,10 @@ def _format_body_reply(rec, prev) -> str:
 
 
 def _refeed_bank_line(status: dict) -> str:
-    """One-line bank status for the /today panel."""
+    """One-line bank status for the /today panel. Refeeds are earned by dropping to
+    a new low, so there is nothing to show someone who is not trying to lose."""
+    if crud.setting("monthly_loss_kg", "MONTHLY_LOSS_KG", 4.0) <= 0:
+        return ""
     if status["current_min"] is None:
         return "🎖️ Refeed：暂无体重数据"
     if status["available"] > 0:
@@ -1064,9 +1067,13 @@ def _build_today_summary(today: date) -> str:
                  f"算下来只剩 {rc['tdee'] - rc['target_deficit'] - 100} kcal，太低了。"
                  f"把目标调慢些，或增加活动量）"
                  if rc["capped"] else
-                 f"（静态 {rc['bmr']} + 运动回补 {rc['active_counted']}"
-                 f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 {rc['target_deficit']}"
-                 f"〔{rc['monthly_goal']:g}kg/月〕）")
+                 f"（静态 {rc['bmr']}"
+                 + (f"×{rc['activity_factor']:g}" if rc["activity_factor"] != 1 else "")
+                 + f" + 运动回补 {rc['active_counted']}"
+                 f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕"
+                 + ("" if rc["target_deficit"] == 0 else
+                    f"− 缺口 {rc['target_deficit']}〔{rc['monthly_goal']:g}kg/月〕")
+                 + "）")
         lines.append(
             f"🎯 今日推荐摄入：{rc['low']}–{rc['high']} kcal{basis}\n"
             f"🥩 蛋白质 {rc['protein_g']}g | 🍚 碳水 {rc['carbs_g']}g | 🧈 脂肪 {rc['fat_g']}g\n\n"
@@ -1074,7 +1081,9 @@ def _build_today_summary(today: date) -> str:
             "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。"
         )
 
-    lines.append("\n" + _refeed_bank_line(crud.refeed_status(today)))
+    refeed_line = _refeed_bank_line(crud.refeed_status(today))
+    if refeed_line:
+        lines.append("\n" + refeed_line)
 
     if body:
         lines.append(f"⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")

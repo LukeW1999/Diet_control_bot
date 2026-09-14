@@ -379,7 +379,11 @@ def recommend_calories(target_date: date | None = None) -> dict:
     avg_active = round(sum(active) / len(active)) if active else 0
     eatback = setting("active_eatback_pct", "ACTIVE_EATBACK_PCT", 0.4)
     active_counted = round(avg_active * eatback)
-    tdee = bmr + active_counted
+    # BMR is the resting figure. Someone whose watch reports their activity gets it
+    # from `active_counted`; without a tracker that term is zero and everyday
+    # movement has to come from somewhere, or maintenance reads as a 400 kcal cut.
+    factor = setting("activity_factor", "USER_ACTIVITY_FACTOR", 1.0)
+    tdee = bmr * factor + active_counted
 
     # Deficit sized for the monthly fat-loss goal (1 kg fat ≈ 7700 kcal); a refeed
     # day zeroes it so intake targets maintenance.
@@ -406,6 +410,7 @@ def recommend_calories(target_date: date | None = None) -> dict:
     return {
         "bmr": round(bmr),
         "floor": round(floor),
+        "activity_factor": factor,
         "capped": capped,
         "avg_active": avg_active,
         "active_counted": active_counted,

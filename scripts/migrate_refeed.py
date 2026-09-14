@@ -10,6 +10,7 @@ _MIGRATIONS = [
     ("user_profile", "refeed_weight_baseline", "REAL"),
     ("user_profile", "monthly_loss_kg", "REAL"),
     ("user_profile", "active_eatback_pct", "REAL"),
+    ("user_profile", "activity_factor", "REAL"),
 ]
 
 

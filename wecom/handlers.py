@@ -25,13 +25,12 @@ _CONV_LOG = os.path.join(os.path.dirname(__file__), "..", "data", "conversation_
 _MODE_LABELS = {"auto": "🤖 自动", "coach": "🏋️ 教练", "chat": "💬 聊天"}
 _WHOLE_PACK = ("整份", "整包", "一份", "全部", "pack", "whole")
 
-_SETUP_HELP = ("👋 先告诉我三件事，才能算你的基础代谢：\n\n"
+_SETUP_HELP = ("👋 先告诉我三件事，才能算你的热量：\n\n"
                "发「/setup 身高 年龄 性别」，例如：\n"
                "　/setup 165 28 女\n\n"
-               "想顺便定个目标，末尾再加每月想减几公斤：\n"
+               "默认只记录热量、不减脂。想减的话末尾加每月几公斤：\n"
                "　/setup 165 28 女 1\n\n"
-               "（不设目标的话按每月 1kg 算。没有运动手表的话，"
-               "缺口只能从吃里省，定太快会被安全下限挡住）")
+               "（没有运动手表的话，缺口只能从吃里省，定太快会被安全下限挡住）")
 
 _DAYS_BACK = {"今天": 0, "昨天": 1, "前天": 2, "大前天": 3}
 
@@ -70,11 +69,22 @@ def _log(event: dict) -> None:
         pass
 
 
-def _needs_setup() -> bool:
-    """Without age and height `get_bmr` falls back to the `.env` figure, which
-    belongs to the primary user and would be wrong for anyone else."""
-    p = crud.get_user_profile()
-    return not (p and p.age and p.height_cm)
+_WEIGHT_HELP = ("还差体重。发一句：\n"
+                "　体重 58\n"
+                "（换成你自己的。基础代谢要用身高、年龄、性别加体重才能算，"
+                "四样缺一不可）")
+
+
+def _setup_gap() -> str | None:
+    """What is still missing before any number here can be trusted. Height, age and
+    sex come from the profile; without a weight as well `get_bmr` falls back to the
+    `.env` figure, which belongs to the primary user."""
+    profile = crud.get_user_profile()
+    if not (profile and profile.age and profile.height_cm):
+        return "profile"
+    if not crud.get_latest_body_composition():
+        return "weight"
+    return None
 
 
 async def handle_text(user_id: str, text: str) -> None:
@@ -82,8 +92,12 @@ async def handle_text(user_id: str, text: str) -> None:
     text = text.strip()
     logger.info("[MSG] from=%s mode=%s text=%s", user_id, st["mode"], text)
 
-    if _needs_setup() and not text.lower().startswith("/setup"):
+    gap = _setup_gap()
+    if gap == "profile" and not text.lower().startswith("/setup"):
         send_text(user_id, _SETUP_HELP)
+        return
+    if gap == "weight" and not re.search(r"体重\s*[\d.]+", text):
+        send_text(user_id, _WEIGHT_HELP)
         return
 
     if text.lower().startswith("/mode"):
@@ -303,19 +317,23 @@ async def _handle_command(user_id: str, st: dict, text: str) -> None:
             send_text(user_id, _SETUP_HELP)
             return
         gender = "female" if parts[2] in ("女", "f", "female", "F") else "male"
-        goal = float(parts[3]) if len(parts) > 3 else 1.0
+        # Maintenance unless a goal is asked for: nobody should be put on a
+        # deficit by default.
+        goal = float(parts[3]) if len(parts) > 3 else 0.0
         crud.update_user_profile(height_cm=height, age=age, gender=gender,
                                  monthly_loss_kg=goal,
-                                 # No tracker to calibrate against for a new user.
+                                 # No tracker, so everyday movement is not reported
+                                 # anywhere and BMR alone would understate upkeep.
+                                 activity_factor=1.3,
                                  active_eatback_pct=0.4)
-        bmr = crud.get_bmr()
+        aim = "维持体重，只记录热量" if goal <= 0 else f"每月减 {goal:g}kg"
         send_text(user_id, f"✅ 资料已保存\n"
                            f"身高 {height:g}cm　年龄 {age}　"
                            f"{'女' if gender == 'female' else '男'}\n"
-                           f"目标 每月 {goal:g}kg\n\n"
-                           f"基础代谢 {bmr:.0f} kcal\n\n"
-                           f"下一步：发一句「体重 58」记录今天的体重，"
-                           f"我就能算出你每天该吃多少。")
+                           f"目标：{aim}\n\n"
+                           f"下一步：发一句「体重 58」记下今天的体重。"
+                           f"基础代谢要用体重才能算，记了才有数。")
+        # Deliberately no BMR here: without a weight it would be the .env fallback.
         return
 
     if cmd == "/food":
