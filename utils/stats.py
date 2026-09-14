@@ -7,9 +7,11 @@ import json
 import os
 from datetime import date, timedelta
 
-_CACHE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "stats_cache.json"
-)
+from utils import tenant
+
+
+def _cache_path() -> str:
+    return str(tenant.data_dir() / "stats_cache.json")
 
 
 def _diff_block(records, days_label: str, meaning: str) -> dict | None:
@@ -141,13 +143,13 @@ def compute_and_save() -> None:
         "body_composition_trends": body_comp,
     }
 
-    os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
-    with open(_CACHE_PATH, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(_cache_path()), exist_ok=True)
+    with open(_cache_path(), "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2, default=str)
 
 
 def load_stats_cache() -> dict | None:
-    if not os.path.exists(_CACHE_PATH):
+    if not os.path.exists(_cache_path()):
         return None
-    with open(_CACHE_PATH, encoding="utf-8") as f:
+    with open(_cache_path(), encoding="utf-8") as f:
         return json.load(f)

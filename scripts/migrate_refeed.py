@@ -8,6 +8,8 @@ _MIGRATIONS = [
     ("daily_summaries", "is_refeed", "INTEGER DEFAULT 0"),
     ("user_profile", "refeed_bonus_notified", "INTEGER DEFAULT 0"),
     ("user_profile", "refeed_weight_baseline", "REAL"),
+    ("user_profile", "monthly_loss_kg", "REAL"),
+    ("user_profile", "active_eatback_pct", "REAL"),
 ]
 
 

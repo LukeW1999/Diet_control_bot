@@ -262,7 +262,7 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     bmr = crud.get_bmr()
-    goal = float(os.getenv("USER_WEIGHT_GOAL", 75.0))
+    goal = crud.setting("weight_goal_kg", "USER_WEIGHT_GOAL", 75.0)
     latest = records[-1]
     lines = [f"📊 体重统计（纯Python计算）\n"]
 
@@ -957,7 +957,7 @@ def _format_body_reply(rec, prev) -> str:
     prev_fat = prev.body_fat_pct if prev and prev.date != rec.date else None
     prev_muscle = prev.muscle_mass_kg if prev and prev.date != rec.date else None
 
-    weight_goal = float(os.getenv("USER_WEIGHT_GOAL", 74.8))
+    weight_goal = crud.setting("weight_goal_kg", "USER_WEIGHT_GOAL", 74.8)
     to_go = (rec.weight_kg or 0) - weight_goal
 
     lines = [
@@ -1060,11 +1060,15 @@ def _build_today_summary(today: date) -> str:
         ]
     else:
         rc = crud.recommend_calories()
+        basis = (f"（已按安全下限 {rc['floor']} kcal 兜底：目标 {rc['monthly_goal']:g}kg/月 "
+                 f"算下来只剩 {rc['tdee'] - rc['target_deficit'] - 100} kcal，太低了。"
+                 f"把目标调慢些，或增加活动量）"
+                 if rc["capped"] else
+                 f"（静态 {rc['bmr']} + 运动回补 {rc['active_counted']}"
+                 f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 {rc['target_deficit']}"
+                 f"〔{rc['monthly_goal']:g}kg/月〕）")
         lines.append(
-            f"🎯 今日推荐摄入：{rc['low']}–{rc['high']} kcal"
-            f"（静态 {rc['bmr']} + 运动回补 {rc['active_counted']}"
-            f"〔{rc['avg_active']}×{rc['eatback_pct']}%〕− 缺口 {rc['target_deficit']}"
-            f"〔{rc['monthly_goal']:g}kg/月〕）\n"
+            f"🎯 今日推荐摄入：{rc['low']}–{rc['high']} kcal{basis}\n"
             f"🥩 蛋白质 {rc['protein_g']}g | 🍚 碳水 {rc['carbs_g']}g | 🧈 脂肪 {rc['fat_g']}g\n\n"
             "今天的数据还没同步。\n"
             "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。"

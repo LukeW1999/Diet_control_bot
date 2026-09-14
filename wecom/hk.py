@@ -10,9 +10,27 @@ import urllib.parse
 
 from flask import Blueprint, request, redirect, jsonify
 
+from utils import tenant
+
 hk_bp = Blueprint("hk", __name__)
 
 SHORTCUT_NAME = "写入健康"
+
+
+def _user_for_request(token: str, name: str) -> str | None:
+    """`token` authenticates, `name` says who. Keeping them apart lets the shared
+    shortcut carry a readable `user` while the secret stays a secret: two iPhones
+    posting the same payload are otherwise indistinguishable here.
+
+    An absent `name` is the primary user, so their shortcut needs no change. A name
+    nobody recognises is refused rather than given a new database, so a typo shows
+    up as a failed sync instead of silently empty stats.
+    """
+    expected = os.getenv("HK_INGEST_TOKEN")
+    if not expected or token != expected:
+        return None
+    user = (name or "").strip().lower() or tenant.primary()
+    return user if user in tenant.known() else None
 
 
 @hk_bp.route("/hk/write")
@@ -33,11 +51,15 @@ def hk_ingest():
     them as the day's diet record — this is how the bot's stats reflect
     everything in HealthKit (薄荷 entries + bot-written labels), no screenshots."""
     import logging
-    token = os.getenv("HK_INGEST_TOKEN")
     body = request.get_json(silent=True) or {}
-    logging.getLogger(__name__).info("hk_ingest received body=%s", body)
-    if not token or body.get("token") != token:
+    user = _user_for_request(body.get("token", ""), body.get("user", ""))
+    if user is None:
         return jsonify({"ok": False, "error": "bad token"}), 403
+    # Each WSGI thread carries its own context, and every request sets this, so a
+    # reused worker thread cannot leak the previous caller's identity.
+    tenant.set_current(user)
+    # The body carries the token; log the sender and the date instead.
+    logging.getLogger(__name__).info("hk_ingest user=%s date=%s", user, body.get("date", "today"))
 
     from db import crud
 
@@ -81,7 +103,7 @@ def hk_ingest():
     rec = crud.upsert_diet_record(data, image_path="healthkit", raw_response="from HealthKit")
 
     resp = {
-        "ok": True, "date": str(rec.date),
+        "ok": True, "user": user, "date": str(rec.date),
         "kcal": rec.total_calories, "protein": rec.protein_g,
         "carbs": rec.carbs_g, "fat": rec.fat_g,
         "exercise": rec.exercise_calories,

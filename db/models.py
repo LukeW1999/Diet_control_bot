@@ -150,6 +150,8 @@ class UserProfile(Base):
     gender = Column(String, default="male")   # male / female
     weight_goal_kg = Column(Float)
     protein_goal_per_kg = Column(Float)
+    monthly_loss_kg = Column(Float)
+    active_eatback_pct = Column(Float)
     refeed_bonus_notified = Column(Integer, default=0)  # last-celebrated earned count
     refeed_weight_baseline = Column(Float)  # anchor weight; new lows below it earn refeeds
     updated_at = Column(DateTime, default=datetime.utcnow)

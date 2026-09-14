@@ -6,20 +6,22 @@ from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
 from .models import (Base, DietRecord, BodyComposition, DailySummary, DiaryEntry,
                      FoodLibraryItem, UserProfile)
+from utils import tenant
 from utils.food_log import write_entry as write_food_log
 
 
-_engine = None
+_engines: dict = {}
 
 
 def get_engine():
-    global _engine
-    if _engine is None:
-        db_path = os.path.join(os.path.dirname(__file__), "..", "data", "health.db")
-        db_path = os.path.abspath(db_path)
-        _engine = create_engine(f"sqlite:///{db_path}")
-        Base.metadata.create_all(_engine)
-    return _engine
+    """One engine per person. `tenant.data_dir()` decides whose database this is."""
+    db_path = tenant.data_dir() / "health.db"
+    engine = _engines.get(db_path)
+    if engine is None:
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(engine)
+        _engines[db_path] = engine
+    return engine
 
 
 def _session():
@@ -229,6 +231,14 @@ def get_user_profile() -> UserProfile | None:
         return session.get(UserProfile, 1)
 
 
+def setting(field: str, env_key: str, default: float) -> float:
+    """A per-person number. The profile wins because each database carries its own;
+    `.env` stays the fallback so the primary user's existing setup keeps working."""
+    profile = get_user_profile()
+    value = getattr(profile, field, None) if profile else None
+    return float(value) if value is not None else float(os.getenv(env_key, default))
+
+
 def update_user_profile(**kwargs) -> UserProfile:
     with _session() as session:
         rec = session.get(UserProfile, 1)
@@ -367,23 +377,36 @@ def recommend_calories(target_date: date | None = None) -> dict:
     recent = get_diet_records_range(target_date - timedelta(days=7), target_date)
     active = [r.exercise_calories for r in recent if r.exercise_calories]
     avg_active = round(sum(active) / len(active)) if active else 0
-    eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
+    eatback = setting("active_eatback_pct", "ACTIVE_EATBACK_PCT", 0.4)
     active_counted = round(avg_active * eatback)
     tdee = bmr + active_counted
 
     # Deficit sized for the monthly fat-loss goal (1 kg fat ≈ 7700 kcal); a refeed
     # day zeroes it so intake targets maintenance.
     refeed = is_refeed_day(target_date)
-    monthly_goal = float(os.getenv("MONTHLY_LOSS_KG", 4.0))
+    monthly_goal = setting("monthly_loss_kg", "MONTHLY_LOSS_KG", 4.0)
     target_deficit = 0 if refeed else round(monthly_goal * 7700 / 30)
     low = round(tdee - target_deficit - 100)   # a bit faster
     high = round(tdee - target_deficit + 100)  # a bit slower
 
-    protein_g = round(weight * float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8))) if weight else 0
+    # Without a tracker TDEE is just BMR, so the whole deficit has to come out of
+    # food and the target can land somewhere nobody should eat. A 58 kg woman
+    # asking for 2 kg a month came out at 697 kcal. Clamp, and say so.
+    # 1200 is the conventional floor for an adult dieting unsupervised. A
+    # gender-split floor was worse: 1500 clamped the primary user's established
+    # 1251 target, which his activity already justifies.
+    floor = setting("min_intake_kcal", "USER_MIN_INTAKE", 1200)
+    capped = low < floor
+    if capped:
+        low, high = round(floor), round(floor) + 200
+
+    protein_g = round(weight * setting("protein_goal_per_kg", "USER_PROTEIN_GOAL_PER_KG", 1.8)) if weight else 0
     fat_g = round(weight * 0.8) if weight else 0
     carbs_g = round(max(high - protein_g * 4 - fat_g * 9, 0) / 4)
     return {
         "bmr": round(bmr),
+        "floor": round(floor),
+        "capped": capped,
         "avg_active": avg_active,
         "active_counted": active_counted,
         "eatback_pct": round(eatback * 100),
@@ -429,7 +452,7 @@ def calibrate_eatback(window_days: int = 42) -> dict:
               if r.total_calories]
 
     min_days = int(os.getenv("CALIBRATE_MIN_DAYS", 20))
-    current = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
+    current = setting("active_eatback_pct", "ACTIVE_EATBACK_PCT", 0.4)
     result = {
         "window_days": window_days,
         "n_weights": len(weights),
@@ -520,7 +543,7 @@ def summary_integrity(days: int = 14) -> list[str]:
 
 
 def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
-    protein_goal_per_kg = float(os.getenv("USER_PROTEIN_GOAL_PER_KG", 1.8))
+    protein_goal_per_kg = setting("protein_goal_per_kg", "USER_PROTEIN_GOAL_PER_KG", 1.8)
 
     body = session.scalar(select(BodyComposition).where(BodyComposition.date == rec.date))
     weight = body.weight_kg if body else None
@@ -535,7 +558,7 @@ def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
 
     # Discount active energy (tracker overestimate) so the deficit — and the
     # fat-loss projection built on it — matches reality, not the watch.
-    eatback = float(os.getenv("ACTIVE_EATBACK_PCT", 0.4))
+    eatback = setting("active_eatback_pct", "ACTIVE_EATBACK_PCT", 0.4)
     calorie_deficit = bmr - (rec.total_calories or 0) + (rec.exercise_calories or 0) * eatback
 
     summary = session.get(DailySummary, rec.date)

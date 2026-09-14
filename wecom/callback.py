@@ -50,7 +50,8 @@ def receive():
         return make_response("", 200)
 
     msg = parse_message(xml)
-    # Auto-save user_id for scheduled messages
+    # Whoever this is, the reply and every database write belong to them.
+    logger.info("[WECOM] from=%s type=%s", msg.source, msg.type)
     _save_user_id(msg.source)
 
     thread = threading.Thread(target=_run, args=(msg,), daemon=True)
@@ -82,8 +83,18 @@ def _run(msg) -> None:
 
 
 async def _dispatch(msg) -> None:
+    from utils import tenant
     from wecom.handlers import handle_text, handle_image
+
+    # A fresh thread starts with an empty context, so this has to be set here
+    # rather than in the request handler.
+    tenant.set_current(msg.source)
+
     if msg.type == "text":
         await handle_text(msg.source, msg.content)
     elif msg.type == "image":
         await handle_image(msg.source, msg.media_id)
+    elif msg.type == "event" and getattr(msg, "event", "") == "click":
+        # Menu keys are the commands themselves, so a tap and a typed command
+        # take the same path.
+        await handle_text(msg.source, msg.key)
