@@ -33,6 +33,8 @@ _SETUP_HELP = ("👋 先告诉我三件事，才能算你的基础代谢：\n\n"
                "（不设目标的话按每月 1kg 算。没有运动手表的话，"
                "缺口只能从吃里省，定太快会被安全下限挡住）")
 
+_DAYS_BACK = {"今天": 0, "昨天": 1, "前天": 2, "大前天": 3}
+
 _state: dict[str, dict] = {}
 
 
@@ -110,8 +112,9 @@ async def handle_text(user_id: str, text: str) -> None:
     weight_match = re.search(r"体重\s*([\d.]+)", text)
     if weight_match:
         weight = float(weight_match.group(1))
-        crud.quick_weight_entry(date.today(), weight)
-        send_text(user_id, f"✅ 体重已记录：{weight} kg（{date.today()}）")
+        when = _weight_date(text)
+        crud.quick_weight_entry(when, weight)
+        send_text(user_id, f"✅ 体重已记录：{weight} kg（{when}）")
         return
 
     correction = await analyst.detect_correction(text)
@@ -145,6 +148,25 @@ async def handle_text(user_id: str, text: str) -> None:
         await _psychologist(user_id, st, text, "route")
     else:
         await _coach(user_id, st, text, "route")
+
+
+def _weight_date(text: str) -> date:
+    """Which day a weigh-in belongs to. Someone without a scale at home weighs
+    wherever they can and records it later, so a bare number cannot always mean
+    today."""
+    for word, back in _DAYS_BACK.items():
+        if word in text:
+            return date.today() - timedelta(days=back)
+    m = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text)
+    if m:
+        today = date.today()
+        month, day = int(m.group(1)), int(m.group(2))
+        year = today.year - 1 if month > today.month else today.year
+        try:
+            return date(year, month, day)
+        except ValueError:
+            pass
+    return date.today()
 
 
 async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
