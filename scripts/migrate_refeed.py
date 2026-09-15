@@ -21,6 +21,8 @@ _MIGRATIONS = [
     ("user_profile", "active_eatback_pct", "REAL"),
     ("user_profile", "activity_factor", "REAL"),
     ("user_profile", "server_food_log", "INTEGER"),
+    ("user_profile", "timezone", "TEXT"),
+    ("user_profile", "evening_hour", "INTEGER"),
 ]
 
 

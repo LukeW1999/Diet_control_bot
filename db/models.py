@@ -173,6 +173,8 @@ class UserProfile(Base):
     active_eatback_pct = Column(Float)
     activity_factor = Column(Float)  # BMR multiplier when no tracker reports activity
     server_food_log = Column(Integer)  # 1 = intake is summed here, not from HealthKit
+    timezone = Column(String)     # IANA name; the evening nudge fires in local time
+    evening_hour = Column(Integer)
     refeed_bonus_notified = Column(Integer, default=0)  # last-celebrated earned count
     refeed_weight_baseline = Column(Float)  # anchor weight; new lows below it earn refeeds
     updated_at = Column(DateTime, default=datetime.utcnow)

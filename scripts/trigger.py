@@ -58,6 +58,11 @@ async def _run(job: str) -> None:
         "weekly_notes":   _weekly_notes_summary,
     }
 
+    if job == "evening":
+        async with bot:
+            await _evening_everyone(bot, chat_id)
+        return
+
     fn = dispatch.get(job)
     if fn is None:
         valid = ", ".join(dispatch)
@@ -67,6 +72,34 @@ async def _run(job: str) -> None:
     async with bot:
         await fn(bot=bot, chat_id=chat_id)
     logger.info("Job done: %s", job)
+
+
+async def _evening_everyone(bot, primary_chat_id: str) -> None:
+    """Run hourly. Each person is nudged when it is evening where they are, not
+    where the server is: one of them is seven hours ahead."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from bot.scheduler import build_evening_text
+    from db import crud
+    from utils import tenant
+
+    for user in sorted(tenant.known()):
+        tenant.set_current(user)
+        profile = crud.get_user_profile()
+        zone = (profile.timezone if profile and profile.timezone else None) or "Europe/London"
+        hour = (profile.evening_hour if profile and profile.evening_hour else None) or 21
+        local = datetime.now(ZoneInfo(zone))
+        if local.hour != hour:
+            logger.info("evening: %s is %02d:00 in %s, not %02d:00", user, local.hour, zone, hour)
+            continue
+        text = build_evening_text()
+        if user == tenant.primary():
+            await bot.send_message(chat_id=primary_chat_id, text=text)
+        else:
+            from wecom.client import send_text
+            send_text(user, text)
+        logger.info("evening sent to %s (%s %02d:00)", user, zone, hour)
 
 
 def main() -> None:

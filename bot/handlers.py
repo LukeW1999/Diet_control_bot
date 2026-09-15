@@ -644,11 +644,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if grams is not None:
             canon, item_id = _food["canon"], _food["item_id"]
             _food_reset()
-            if item_id:
-                crud.record_food_use(item_id, grams)
-            scaled = scale_to_grams(canon, grams)
-            await update.message.reply_text(format_scaled(scaled))
-            _log_event({"type": "food_scaled", "grams": grams, "healthkit": scaled})
+            reply = (foodlog.log_from_library(item_id, grams) if item_id
+                     else format_scaled(scale_to_grams(canon, grams)))
+            await update.message.reply_text(reply)
+            _log_event({"type": "food_scaled", "grams": grams})
             return
         # not a gram amount → drop the pending state and fall through to normal handling
         _food_reset()

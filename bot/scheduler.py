@@ -110,6 +110,10 @@ async def _morning_check(bot: Bot, chat_id: str) -> None:
 
 
 async def _evening_summary(bot: Bot, chat_id: str) -> None:
+    await bot.send_message(chat_id=chat_id, text=build_evening_text())
+
+
+def build_evening_text() -> str:
     today = date.today()
     diet = crud.get_diet_record(today)
     bmr = crud.get_bmr()
@@ -143,8 +147,7 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
                 f"📉 日均热量缺口：{avg_daily_deficit:.0f} kcal",
                 f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
             ]
-        await bot.send_message(chat_id=chat_id, text="\n".join(lines))
-        return
+        return "\n".join(lines)
 
     # ── 今天有记录 ────────────────────────────────────────────
     net = (diet.total_calories or 0) - (diet.exercise_calories or 0)
@@ -172,7 +175,7 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
         ]
 
     lines += _healthkit_handoff(diet)
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    return "\n".join(lines)
 
 
 def _healthkit_handoff(diet) -> list[str]:
