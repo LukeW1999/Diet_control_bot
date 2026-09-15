@@ -9,14 +9,15 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from bot.handlers import (
     cmd_start, cmd_today, cmd_week, cmd_body, cmd_month, cmd_report,
     cmd_profile, cmd_update, cmd_stats, cmd_calibrate, cmd_mode, cmd_tz, cmd_server, _server_watch,
-    cmd_food, cmd_foods, handle_photo, handle_text, handle_document, handle_callback,
+    cmd_food, cmd_foods, cmd_partner, handle_photo, handle_text, handle_document, handle_callback,
 )
 
 # Commands shown when you type "/" or tap the menu button — no more typing.
 _COMMANDS = [
     BotCommand("start", "主菜单 / 打开按钮"),
     BotCommand("food", "🍎 记食物（扫条码 / 文字描述）"),
-    BotCommand("foods", "📚 食物库（扫过的商品）"),
+    BotCommand("foods", "📚 吃过的东西"),
+    BotCommand("ta", "👀 看对方今天吃了什么"),
     BotCommand("today", "今日数据"),
     BotCommand("week", "本周汇总"),
     BotCommand("month", "本月汇总"),
@@ -58,6 +59,7 @@ def main() -> None:
     app.add_handler(CommandHandler("food", cmd_food))
     app.add_handler(CommandHandler("nutrition", cmd_food))  # alias
     app.add_handler(CommandHandler("foods", cmd_foods))
+    app.add_handler(CommandHandler("ta", cmd_partner))
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("body", cmd_body))
     app.add_handler(CommandHandler("month", cmd_month))

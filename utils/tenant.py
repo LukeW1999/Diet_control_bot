@@ -36,6 +36,13 @@ def current() -> str:
     return _current.get() or primary()
 
 
+def partner() -> str | None:
+    """The other person sharing this instance. Only meaningful for a pair, which is
+    what this is: with anyone else there is no single "other"."""
+    others = known() - {current()}
+    return others.pop() if len(others) == 1 else None
+
+
 def data_dir() -> Path:
     if current() == primary():
         return _ROOT

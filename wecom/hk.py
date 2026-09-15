@@ -88,6 +88,21 @@ def hk_ingest():
     if len(bdata) > 1:
         crud.upsert_body_composition(bdata, image_path="healthkit", raw_response="from HealthKit")
 
+    # Anything logged here already counts. Letting the sync overwrite it would
+    # zero the day whenever the Apple Health side had not been filled in yet.
+    from datetime import date as _date
+    day = _date.today() if the_date == "today" else _date.fromisoformat(the_date)
+    if crud.get_food_entries(day):
+        rec = crud.get_diet_record(day)
+        exercise = _round(body.get("exercise"), 0)
+        if rec and exercise and exercise != (rec.exercise_calories or 0):
+            crud.apply_correction("diet", "exercise_calories", exercise, day)
+        return jsonify({"ok": True, "user": user, "date": str(day),
+                        "note": "intake kept from server log",
+                        "kcal": rec.total_calories if rec else None,
+                        "exercise": exercise,
+                        "weight": bdata.get("weight_kg")})
+
     data = {
         "date": the_date,
         "summary": {

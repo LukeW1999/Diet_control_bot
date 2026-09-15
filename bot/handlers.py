@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 from db import crud
 from llm import analyst
+from utils import foodlog
 from utils.media_store import save_document as _media_save_doc
 from .keyboards import main_menu, mode_menu, food_library_menu, tz_menu, MODE_LABELS
 
@@ -501,6 +502,13 @@ async def cmd_tz(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(_tz_status(), reply_markup=tz_menu(_current_tz()))
 
 
+async def cmd_partner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """What the other half ate today."""
+    if not _allowed(update):
+        return
+    await update.message.reply_text(foodlog.partner_day())
+
+
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _allowed(update):
         return
@@ -889,7 +897,11 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith("food_pick:"):
-        item = crud.get_food_item(int(data.split(":")[1]))
+        item_id = int(data.split(":")[1])
+        if foodlog.logs_to_server():
+            await query.edit_message_text(foodlog.log_from_library(item_id))
+            return
+        item = crud.get_food_item(item_id)
         if item is None:
             await query.edit_message_text("这条记录已经不在食物库里了。")
             return

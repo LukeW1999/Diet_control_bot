@@ -171,7 +171,23 @@ async def _evening_summary(bot: Bot, chat_id: str) -> None:
             f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
         ]
 
+    lines += _healthkit_handoff(diet)
     await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+
+
+def _healthkit_handoff(diet) -> list[str]:
+    """Nothing writes the day into Apple Health once food is logged here, so offer
+    the link once at the end of the day rather than one per item."""
+    from utils import foodlog
+    if not foodlog.logs_to_server() or not (diet.total_calories or 0):
+        return []
+    from llm.nutrition import healthkit_link
+    link = healthkit_link({
+        "dietary_energy_kcal": diet.total_calories,
+        "protein_g": diet.protein_g, "carbs_g": diet.carbs_g, "fat_g": diet.fat_g,
+    })
+    return ["\n🍎 写进 Apple 健康（今天整天一次）：", link,
+            "在 Safari 打开，或复制到 Safari 地址栏。"]
 
 
 async def _notes_reminder(bot: Bot, chat_id: str) -> None:
