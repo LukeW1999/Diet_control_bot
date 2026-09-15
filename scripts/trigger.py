@@ -94,12 +94,14 @@ async def _evening_everyone(bot, primary_chat_id: str) -> None:
             logger.info("evening: %s is %02d:00 in %s, not %02d:00", user, local.hour, zone, hour)
             continue
         text = build_evening_text()
-        if user == tenant.primary():
+        channel = (profile.notify_channel if profile and profile.notify_channel
+                   else ("telegram" if user == tenant.primary() else "wecom"))
+        if channel in ("telegram", "both"):
             await bot.send_message(chat_id=primary_chat_id, text=text)
-        else:
+        if channel in ("wecom", "both"):
             from wecom.client import send_text
             send_text(user, text)
-        logger.info("evening sent to %s (%s %02d:00)", user, zone, hour)
+        logger.info("evening sent to %s via %s (%s %02d:00)", user, channel, zone, hour)
 
 
 def main() -> None:

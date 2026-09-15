@@ -23,6 +23,7 @@ _MIGRATIONS = [
     ("user_profile", "server_food_log", "INTEGER"),
     ("user_profile", "timezone", "TEXT"),
     ("user_profile", "evening_hour", "INTEGER"),
+    ("user_profile", "notify_channel", "TEXT"),
 ]
 
 

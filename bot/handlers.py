@@ -1088,8 +1088,10 @@ def _build_today_summary(today: date) -> str:
         lines.append(
             f"🎯 今日推荐摄入：{rc['low']}–{rc['high']} kcal{basis}\n"
             f"🥩 蛋白质 {rc['protein_g']}g | 🍚 碳水 {rc['carbs_g']}g | 🧈 脂肪 {rc['fat_g']}g\n\n"
-            "今天的数据还没同步。\n"
-            "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。"
+            + ("今天还没记东西。直接发你吃了什么，比如「米饭200g」。"
+               if foodlog.logs_to_server() else
+               "今天的数据还没同步。\n"
+               "每天 23:50 自动从 HealthKit 同步；想现在看，手动跑一次「同步健康」快捷指令。")
         )
 
     refeed_line = _refeed_bank_line(crud.refeed_status(today))
