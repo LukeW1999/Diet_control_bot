@@ -113,8 +113,8 @@ def log_from_library(item_id: int, grams: float | None = None) -> str:
 
 
 def partner_day() -> str:
-    """What the other half ate today. Food only: the diary and the psychologist's
-    notes stay private to whoever wrote them."""
+    """What the other half ate and weighs. The diary and the psychologist's notes
+    stay private to whoever wrote them; writes stay separate regardless."""
     from datetime import date
     other = tenant.partner()
     if not other:
@@ -125,6 +125,7 @@ def partner_day() -> str:
         entries = crud.get_food_entries()
         rc = crud.recommend_calories()
         record = crud.get_diet_record(date.today())
+        body = crud.get_latest_body_composition()
     finally:
         tenant.set_current(mine)
 
@@ -139,4 +140,6 @@ def partner_day() -> str:
         lines.append("（对方用 HealthKit 同步，看不到单项明细）")
     else:
         lines.append("还没记东西。")
+    if body and body.weight_kg:
+        lines.append(f"⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")
     return "\n".join(lines)

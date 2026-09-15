@@ -20,6 +20,7 @@ MENU = {"button": [
         {"type": "click", "name": "本周汇总", "key": "/week"},
         {"type": "click", "name": "身体成分", "key": "/body"},
         {"type": "click", "name": "生成周报", "key": "/report"},
+        {"type": "click", "name": "👀 看对方", "key": "/ta"},
     ]},
     {"name": "⚙️ 模式", "sub_button": [
         {"type": "click", "name": "教练", "key": "/mode 教练"},
