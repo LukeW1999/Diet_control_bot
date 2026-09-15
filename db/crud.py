@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
 from .models import (Base, DietRecord, BodyComposition, DailySummary, DiaryEntry,
-                     FoodLibraryItem, UserProfile)
+                     FoodEntry, FoodLibraryItem, UserProfile)
 from utils import tenant
 from utils.food_log import write_entry as write_food_log
 
@@ -648,3 +648,63 @@ def find_food(name: str, barcode: str = None) -> FoodLibraryItem | None:
         where = (FoodLibraryItem.barcode == barcode) if barcode else (
             (FoodLibraryItem.barcode.is_(None)) & (FoodLibraryItem.name == name))
         return s.scalar(select(FoodLibraryItem).where(where))
+
+
+# ── server-side food log ──────────────────────────────────────────────────────
+def add_food_entry(name: str, portion: str, kcal, protein, carbs, fat,
+                   when: date | None = None) -> "FoodEntry":
+    when = when or date.today()
+    with _session() as s:
+        entry = FoodEntry(date=when, name=name, portion=portion or "",
+                          energy_kcal=kcal, protein_g=protein,
+                          carbs_g=carbs, fat_g=fat, created_at=datetime.utcnow())
+        s.add(entry)
+        s.commit()
+        s.refresh(entry)
+    _rebuild_diet_from_entries(when)
+    return entry
+
+
+def get_food_entries(when: date | None = None) -> list["FoodEntry"]:
+    when = when or date.today()
+    with _session() as s:
+        return list(s.scalars(
+            select(FoodEntry).where(FoodEntry.date == when).order_by(FoodEntry.id)))
+
+
+def undo_last_food_entry(when: date | None = None) -> "FoodEntry | None":
+    when = when or date.today()
+    with _session() as s:
+        entry = s.scalar(select(FoodEntry).where(FoodEntry.date == when)
+                         .order_by(desc(FoodEntry.id)).limit(1))
+        if entry is None:
+            return None
+        s.delete(entry)
+        s.commit()
+    _rebuild_diet_from_entries(when)
+    return entry
+
+
+def _rebuild_diet_from_entries(when: date) -> None:
+    """The day's DietRecord is the sum of its entries. Only ever called for people
+    who log here, so a HealthKit-synced record is never overwritten."""
+    entries = get_food_entries(when)
+    total = lambda f: round(sum(getattr(e, f) or 0 for e in entries), 1)
+    with _session() as s:
+        rec = s.scalar(select(DietRecord).where(DietRecord.date == when))
+        if rec is None:
+            rec = DietRecord(date=when)
+            s.add(rec)
+        rec.total_calories = total("energy_kcal")
+        rec.protein_g = total("protein_g")
+        rec.carbs_g = total("carbs_g")
+        rec.fat_g = total("fat_g")
+        rec.exercise_calories = rec.exercise_calories or 0
+        rec.meals_json = json.dumps([], ensure_ascii=False)
+        rec.exercise_json = json.dumps([], ensure_ascii=False)
+        rec.created_at = datetime.utcnow()
+        s.commit()
+        s.refresh(rec)
+        _update_daily_summary_from_diet(s, rec)
+        s.commit()
+        write_food_log(rec)

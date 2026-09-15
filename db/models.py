@@ -121,6 +121,25 @@ class DiaryEntry(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class FoodEntry(Base):
+    """One thing eaten, stored here rather than round-tripped through Apple Health.
+
+    WeCom's in-app browser will not follow the `shortcuts://` redirect, so the
+    HealthKit link is inert there and the day's intake has to be summed server
+    side instead."""
+    __tablename__ = "food_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    portion = Column(String)
+    energy_kcal = Column(Float)
+    protein_g = Column(Float)
+    carbs_g = Column(Float)
+    fat_g = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class FoodLibraryItem(Base):
     """A food you have logged before, held as per-100g facts so it can be logged
     again at any weight. Barcode entries carry Open Food Facts numbers exactly;
@@ -153,6 +172,7 @@ class UserProfile(Base):
     monthly_loss_kg = Column(Float)
     active_eatback_pct = Column(Float)
     activity_factor = Column(Float)  # BMR multiplier when no tracker reports activity
+    server_food_log = Column(Integer)  # 1 = intake is summed here, not from HealthKit
     refeed_bonus_notified = Column(Integer, default=0)  # last-celebrated earned count
     refeed_weight_baseline = Column(Float)  # anchor weight; new lows below it earn refeeds
     updated_at = Column(DateTime, default=datetime.utcnow)

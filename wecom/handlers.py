@@ -34,6 +34,13 @@ _SETUP_HELP = ("👋 先告诉我三件事，才能算你的热量：\n\n"
 
 _DAYS_BACK = {"今天": 0, "昨天": 1, "前天": 2, "大前天": 3}
 
+# Typing what you ate is the whole point, so an amount plus a unit is taken as
+# food without arming anything first. The lookahead keeps "睡了8个小时" out.
+_FOOD_HINT = re.compile(
+    r"(?:[\d.]+|[一二两三四五六七八九十半])\s*"
+    r"(?:g|G|克|ml|ML|毫升|个|只|片|块|碗|杯|份|勺|根|颗|盒|袋|瓶)"
+    r"(?!\s*(?:小时|分钟|天|步|公里|次|人|遍|年|月|周|岁))")
+
 _state: dict[str, dict] = {}
 
 
@@ -109,6 +116,13 @@ async def handle_text(user_id: str, text: str) -> None:
         send_text(user_id, f"当前：{_MODE_LABELS[st['mode']]}\n\n/mode 教练 | /mode 聊天 | /mode 自动")
         return
 
+    if text in ("撤回", "删掉", "记错了", "undo") or text.lower() == "/undo":
+        entry = crud.undo_last_food_entry()
+        send_text(user_id, (f"↩️ 已撤回：{entry.name} {entry.portion}"
+                            f"（{entry.energy_kcal:.0f} kcal）\n\n{_today_line()}")
+                  if entry else "今天还没有可撤回的记录。")
+        return
+
     if text.startswith("/"):
         await _handle_command(user_id, st, text)
         return
@@ -129,6 +143,10 @@ async def handle_text(user_id: str, text: str) -> None:
         when = _weight_date(text)
         crud.quick_weight_entry(when, weight)
         send_text(user_id, f"✅ 体重已记录：{weight} kg（{when}）")
+        return
+
+    if _FOOD_HINT.search(text):
+        await _log_food_text(user_id, st, text)
         return
 
     correction = await analyst.detect_correction(text)
@@ -183,10 +201,83 @@ def _weight_date(text: str) -> date:
     return date.today()
 
 
+def _logs_to_server() -> bool:
+    """WeCom cannot open the HealthKit link, so these users' intake is summed here."""
+    profile = crud.get_user_profile()
+    return bool(profile and profile.server_food_log)
+
+
+def _today_line() -> str:
+    """Running total against the target, so the number is never more than a tap away."""
+    rc = crud.recommend_calories()
+    eaten = sum(e.energy_kcal or 0 for e in crud.get_food_entries())
+    left = round(rc["high"] - eaten)
+    return (f"今天累计 {eaten:.0f} / {rc['low']}–{rc['high']} kcal　"
+            + (f"还可吃 {left}" if left > 0 else f"已超 {-left}"))
+
+
+async def _log_food_text(user_id: str, st: dict, text: str) -> None:
+    """Estimate a typed description and keep it, rather than hand back a dead link."""
+    from llm.foodsearch import estimate_food_text
+    from llm.nutrition import _grams_in, format_estimate, per_100g_from_estimate
+    _food_reset(st)
+    send_text(user_id, "🍎 估算中...")
+    try:
+        est = await estimate_food_text(text)
+    except Exception as e:
+        logger.exception("food estimate failed")
+        send_text(user_id, f"估算失败：{e}")
+        return
+
+    if not _logs_to_server():
+        send_text(user_id, format_estimate(est))
+        return
+
+    items = est.get("items") or [{"name": est.get("food", text[:20]), "portion": "",
+                                  "energy_kcal": est.get("dietary_energy_kcal")}]
+    n = max(len(items), 1)
+    for i in items:
+        share = (i.get("energy_kcal") or 0) / (est.get("dietary_energy_kcal") or 1)
+        crud.add_food_entry(
+            i.get("name") or text[:20], i.get("portion", ""), i.get("energy_kcal"),
+            round((est.get("protein_g") or 0) * share, 1),
+            round((est.get("carbs_g") or 0) * share, 1),
+            round((est.get("fat_g") or 0) * share, 1))
+    keep = per_100g_from_estimate(est, text)
+    if keep:
+        crud.remember_food(*keep)
+        # Remember the amount too, so picking it off the list repeats what she ate
+        # rather than falling back to an arbitrary 100g.
+        saved = crud.find_food(keep[0])
+        grams = _grams_in(items[0].get("portion", ""))
+        if saved and grams:
+            crud.record_food_use(saved.id, grams)
+
+    lines = ["✅ 已记录"]
+    for i in items:
+        lines.append(f"　• {i['name']} {i.get('portion','')}　{i.get('energy_kcal')} kcal")
+    lines += [f"🔥 这一笔 {est.get('dietary_energy_kcal')} kcal　"
+              f"🥩 蛋白 {est.get('protein_g')}g", "", _today_line(),
+              "", "记错了发「撤回」"]
+    send_text(user_id, "\n".join(lines))
+
+
 async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
     """Grams for a looked-up barcode, or a description to estimate. True if handled."""
     from llm.nutrition import scale_to_grams, format_scaled, format_estimate, per_100g_from_estimate
     food = st["food"]
+
+    menu = food.get("menu")
+    if menu:
+        m = re.match(r"^\s*(\d+)\s*$", text)
+        if m and 1 <= int(m.group(1)) <= len(menu):
+            item = crud.get_food_item(menu[int(m.group(1)) - 1])
+            _food_reset(st)
+            if item:
+                await _log_from_library(user_id, item,
+                                        item.last_grams or item.serving_g or 100)
+                return True
+        _food_reset(st)
 
     if food.get("canon"):
         serving_g = food.get("serving_g")
@@ -201,7 +292,15 @@ async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
             if item_id:
                 crud.record_food_use(item_id, grams)
             scaled = scale_to_grams(canon, grams)
-            send_text(user_id, format_scaled(scaled))
+            if _logs_to_server():
+                crud.add_food_entry(food.get("name") or "食物", f"{grams:g}g",
+                                    scaled["dietary_energy_kcal"], scaled["protein_g"],
+                                    scaled["carbs_g"], scaled["fat_g"])
+                send_text(user_id, f"✅ 已记录 {food.get('name')} {grams:g}g　"
+                                   f"{scaled['dietary_energy_kcal']:.0f} kcal\n\n"
+                                   f"{_today_line()}\n\n记错了发「撤回」")
+            else:
+                send_text(user_id, format_scaled(scaled))
             _log({"type": "food_scaled", "user": user_id, "grams": grams})
             return True
         _food_reset(st)  # not an amount, treat it as an ordinary message
@@ -226,6 +325,21 @@ async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
         return True
 
     return False
+
+
+async def _log_from_library(user_id: str, item, grams: float) -> None:
+    from llm.nutrition import scale_to_grams, format_scaled
+    scaled = scale_to_grams(json.loads(item.canon_json), grams)
+    if _logs_to_server():
+        crud.add_food_entry(item.name, f"{grams:g}g", scaled["dietary_energy_kcal"],
+                            scaled["protein_g"], scaled["carbs_g"], scaled["fat_g"])
+        crud.record_food_use(item.id, grams)
+        send_text(user_id, f"✅ 已记录 {item.name} {grams:g}g　"
+                           f"{scaled['dietary_energy_kcal']:.0f} kcal\n\n"
+                           f"{_today_line()}\n\n记错了发「撤回」")
+    else:
+        crud.record_food_use(item.id, grams)
+        send_text(user_id, format_scaled(scaled))
 
 
 async def handle_image(user_id: str, media_id: str) -> None:
@@ -325,6 +439,9 @@ async def _handle_command(user_id: str, st: dict, text: str) -> None:
                                  # No tracker, so everyday movement is not reported
                                  # anywhere and BMR alone would understate upkeep.
                                  activity_factor=1.3,
+                                 # WeCom cannot open the HealthKit link, so intake
+                                 # is summed here instead of synced back.
+                                 server_food_log=1,
                                  active_eatback_pct=0.4)
         aim = "维持体重，只记录热量" if goal <= 0 else f"每月减 {goal:g}kg"
         send_text(user_id, f"✅ 资料已保存\n"
@@ -348,15 +465,21 @@ async def _handle_command(user_id: str, st: dict, text: str) -> None:
             send_text(user_id, f"食物库里没有匹配「{arg}」的东西。" if arg
                       else "食物库还是空的。扫一次条码，之后就会出现在这里。")
             return
-        lines = ["📚 食物库（回「用 序号 克数」记录，如「用 1 150」）"]
+        lines = ["📚 吃过的东西 —— 直接回数字就再记一份："]
         for i, it in enumerate(items, 1):
-            last = f" · 上次{it.last_grams:g}g" if it.last_grams else ""
-            lines.append(f"{i}. {it.name}{last}")
+            last = f"（{it.last_grams:g}g）" if it.last_grams else ""
+            lines.append(f"　{i}. {it.name}{last}")
         st["food"]["menu"] = [it.id for it in items]
         send_text(user_id, "\n".join(lines))
     elif cmd == "/today":
         from bot.handlers import _build_today_summary
-        send_text(user_id, _build_today_summary(date.today()))
+        summary = _build_today_summary(date.today())
+        entries = crud.get_food_entries() if _logs_to_server() else []
+        if entries:
+            summary += "\n\n🍽️ 今天吃了："
+            for e in entries:
+                summary += f"\n　• {e.name} {e.portion}　{(e.energy_kcal or 0):.0f} kcal"
+        send_text(user_id, summary)
     elif cmd == "/week":
         today = date.today()
         records = crud.get_daily_summaries_range(today - timedelta(days=6), today)
@@ -379,6 +502,7 @@ async def _handle_command(user_id: str, st: dict, text: str) -> None:
         from bot.handlers import _generate_report
         send_text(user_id, await _generate_report())
     else:
-        send_text(user_id, "可用指令：\n/food 记食物　/foods 食物库\n"
+        send_text(user_id, "直接打字就能记，比如「米饭200g」「一个鸡蛋」。\n\n"
+                           "可用指令：\n/foods 吃过的东西　撤回 删掉上一笔\n"
                            "/today 今日　/week 本周　/body 身体成分　/report 周报\n"
                            "/mode 教练|聊天|自动")
