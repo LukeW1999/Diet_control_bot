@@ -71,16 +71,39 @@ async def log_text(description: str) -> str:
     for i in items:
         lines.append(f"　• {i['name']} {i.get('portion','')}　{i.get('energy_kcal')} kcal")
     lines += [f"🔥 这一笔 {est.get('dietary_energy_kcal')} kcal　"
-              f"🥩 蛋白 {est.get('protein_g')}g", "", today_line(), "", "记错了发「撤回」"]
+              f"🥩 蛋白 {est.get('protein_g')}g", "", today_line(), "",
+              "记错了发「撤回」，撤回指定的发「撤回 2」"]
     return "\n".join(lines)
 
 
-def undo() -> str:
-    entry = crud.undo_last_food_entry()
-    if entry is None:
+def entries_list(entries=None) -> str:
+    """Numbered, because "撤回 2" needs the numbers to mean something."""
+    entries = crud.get_food_entries() if entries is None else entries
+    if not entries:
+        return "今天还没记东西。"
+    return "\n".join(
+        f"　{i}. {e.name} {e.portion}　{(e.energy_kcal or 0):.0f} kcal"
+        for i, e in enumerate(entries, 1))
+
+
+def undo(index: int | None = None) -> str:
+    """Remove the last entry, or the numbered one from today's list."""
+    entries = crud.get_food_entries()
+    if not entries:
         return "今天还没有可撤回的记录。"
+    if index is None:
+        entry = crud.undo_last_food_entry()
+    elif 1 <= index <= len(entries):
+        entry = crud.delete_food_entry(entries[index - 1].id)
+    else:
+        return (f"今天只有 {len(entries)} 笔，没有第 {index} 笔：\n"
+                + entries_list(entries))
     return (f"↩️ 已撤回：{entry.name} {entry.portion}"
-            f"（{(entry.energy_kcal or 0):.0f} kcal）\n\n{today_line()}")
+            f"（{(entry.energy_kcal or 0):.0f} kcal）\n\n{today_line()}"
+            + ("\n\n剩下的：\n" + entries_list() if crud.get_food_entries() else ""))
+
+
+UNDO_RE = re.compile(r"^\s*(?:撤回|删掉|删除)\s*(\d+)\s*$")
 
 
 def library_list(keyword: str = "") -> tuple[str, list[int]]:
@@ -109,7 +132,7 @@ def log_from_library(item_id: int, grams: float | None = None) -> str:
                         scaled["protein_g"], scaled["carbs_g"], scaled["fat_g"])
     return (f"✅ 已记录 {item.name} {grams:g}g　"
             f"{(scaled['dietary_energy_kcal'] or 0):.0f} kcal\n\n"
-            f"{today_line()}\n\n记错了发「撤回」")
+            f"{today_line()}\n\n记错了发「撤回」，撤回指定的发「撤回 2」")
 
 
 def partner_day() -> str:

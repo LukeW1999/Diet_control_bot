@@ -685,6 +685,18 @@ def undo_last_food_entry(when: date | None = None) -> "FoodEntry | None":
     return entry
 
 
+def delete_food_entry(entry_id: int) -> "FoodEntry | None":
+    with _session() as s:
+        entry = s.get(FoodEntry, entry_id)
+        if entry is None:
+            return None
+        when = entry.date
+        s.delete(entry)
+        s.commit()
+    _rebuild_diet_from_entries(when)
+    return entry
+
+
 def _rebuild_diet_from_entries(when: date) -> None:
     """The day's DietRecord is the sum of its entries. Only ever called for people
     who log here, so a HealthKit-synced record is never overwritten."""

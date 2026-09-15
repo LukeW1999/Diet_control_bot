@@ -1101,6 +1101,11 @@ def _build_today_summary(today: date) -> str:
     if body:
         lines.append(f"⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")
 
+    entries = crud.get_food_entries(today) if foodlog.logs_to_server() else []
+    if entries:
+        lines.append("\n🍽️ 今天吃了：\n" + foodlog.entries_list(entries)
+                     + "\n\n撤回某一笔发「撤回 2」")
+
     return "\n".join(lines)
 
 

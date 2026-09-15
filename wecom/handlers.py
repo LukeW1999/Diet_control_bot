@@ -109,6 +109,10 @@ async def handle_text(user_id: str, text: str) -> None:
         send_text(user_id, f"当前：{_MODE_LABELS[st['mode']]}\n\n/mode 教练 | /mode 聊天 | /mode 自动")
         return
 
+    undo_n = foodlog.UNDO_RE.match(text)
+    if undo_n:
+        send_text(user_id, foodlog.undo(int(undo_n.group(1))))
+        return
     if text in foodlog.UNDO_WORDS or text.lower() == "/undo":
         send_text(user_id, foodlog.undo())
         return
@@ -385,13 +389,7 @@ async def _handle_command(user_id: str, st: dict, text: str) -> None:
         send_text(user_id, foodlog.partner_day())
     elif cmd == "/today":
         from bot.handlers import _build_today_summary
-        summary = _build_today_summary(date.today())
-        entries = crud.get_food_entries() if foodlog.logs_to_server() else []
-        if entries:
-            summary += "\n\n🍽️ 今天吃了："
-            for e in entries:
-                summary += f"\n　• {e.name} {e.portion}　{(e.energy_kcal or 0):.0f} kcal"
-        send_text(user_id, summary)
+        send_text(user_id, _build_today_summary(date.today()))
     elif cmd == "/week":
         today = date.today()
         records = crud.get_daily_summaries_range(today - timedelta(days=6), today)
