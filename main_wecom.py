@@ -7,6 +7,7 @@ load_dotenv()
 from flask import Flask
 from wecom.callback import callback_bp
 from wecom.hk import hk_bp
+from weixin.bind_web import bind_bp
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -21,6 +22,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.register_blueprint(callback_bp)
     app.register_blueprint(hk_bp)
+    app.register_blueprint(bind_bp)
     return app
 
 
