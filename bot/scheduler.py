@@ -162,17 +162,19 @@ def build_evening_text() -> str:
     lines = [
         "今天收工，来对账。🌙\n",
         "📊 今日数据",
-        f"🔥 热量：{(diet.total_calories or 0):.0f} kcal（缺口 {today_deficit:.0f} kcal）",
+        (f"🔥 热量：{(diet.total_calories or 0):.0f} kcal"
+         + (f"（缺口 {today_deficit:.0f} kcal）" if _cutting() else "")),
         f"🥩 蛋白质：{protein_g:.0f}g / {protein_goal_g:.0f}g（{protein_pct}%）{protein_icon}",
         f"🍚 碳水：{(diet.carbs_g or 0):.0f}g | 🧈 脂肪：{(diet.fat_g or 0):.0f}g",
     ]
 
     if tracked_days > 0:
-        lines += [
-            f"\n📅 过去30天已记录 {tracked_days} 天（遗漏天不计入）",
-            f"📉 日均热量缺口：{avg_daily_deficit:.0f} kcal",
-            f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
-        ]
+        lines.append(f"\n📅 过去30天已记录 {tracked_days} 天（遗漏天不计入）")
+        if _cutting():
+            lines += [
+                f"📉 日均热量缺口：{avg_daily_deficit:.0f} kcal",
+                f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
+            ]
 
     from utils import foodlog, tenant
     # A light day of logging is not a light day of eating, and reading it back as
@@ -186,6 +188,12 @@ def build_evening_text() -> str:
     if tenant.partner():
         lines.append("\n" + foodlog.partner_day())
     return "\n".join(lines)
+
+
+def _cutting() -> bool:
+    """Someone only tracking intake has no deficit to report, and telling them they
+    are losing 4.89 kg a month is both wrong and unwanted."""
+    return crud.setting("monthly_loss_kg", "MONTHLY_LOSS_KG", 4.0) > 0
 
 
 def _healthkit_handoff(diet) -> list[str]:
