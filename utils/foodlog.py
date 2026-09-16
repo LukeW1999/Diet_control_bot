@@ -16,7 +16,8 @@ FOOD_HINT = re.compile(
     r"(?:g|G|克|ml|ML|毫升|个|只|片|块|碗|杯|份|勺|根|颗|盒|袋|瓶)"
     r"(?!\s*(?:小时|分钟|天|步|公里|次|人|遍|年|月|周|岁))")
 
-UNDO_WORDS = ("撤回", "删掉", "记错了", "undo")
+UNDO_WORDS = ("撤回", "记错了", "undo")          # drop the last thing logged
+LIST_WORDS = ("删除", "删除记录", "删掉", "删")   # choose which one to drop
 _PARTNER_LABEL = {"sjy": "她", "wangweiqi": "炜奇"}
 
 
@@ -72,7 +73,7 @@ async def log_text(description: str) -> str:
         lines.append(f"　• {i['name']} {i.get('portion','')}　{i.get('energy_kcal')} kcal")
     lines += [f"🔥 这一笔 {est.get('dietary_energy_kcal')} kcal　"
               f"🥩 蛋白 {est.get('protein_g')}g", "", today_line(), "",
-              "记错了发「撤回」，撤回指定的发「撤回 2」"]
+              "记错了发「撤回」；要删别的发「删除」"]
     return "\n".join(lines)
 
 
@@ -165,7 +166,7 @@ def log_from_library(item_id: int, grams: float | None = None) -> str:
                         scaled["protein_g"], scaled["carbs_g"], scaled["fat_g"])
     return (f"✅ 已记录 {item.name} {grams:g}g　"
             f"{(scaled['dietary_energy_kcal'] or 0):.0f} kcal\n\n"
-            f"{today_line()}\n\n记错了发「撤回」，撤回指定的发「撤回 2」")
+            f"{today_line()}\n\n记错了发「撤回」；要删别的发「删除」")
 
 
 def partner_day() -> str:
