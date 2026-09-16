@@ -45,6 +45,8 @@ async def _loop(tenant_key: str, cfg: dict) -> None:
             logger.info("weixin msg %s", json.dumps(
                 {k: (v[:24] if isinstance(v, str) else v)
                  for k, v in msg.items() if k != "item_list"}, ensure_ascii=False)[:300])
+            _remember(tenant_key, "last_context", msg.get("context_token", ""))
+            _remember(tenant_key, "last_from", msg.get("from_user_id", ""))
             tenant.set_current(tenant_key)
             try:
                 await handlers.handle_message(tenant_key, token, msg)
@@ -54,9 +56,15 @@ async def _loop(tenant_key: str, cfg: dict) -> None:
 
 def _remember_cursor(tenant_key: str, buf: str) -> None:
     """Persist it, or a restart replays whatever the server still holds."""
+    _remember(tenant_key, "updates_buf", buf)
+
+
+def _remember(tenant_key: str, field: str, value: str) -> None:
+    """Keeping the last context token makes a failed reply retryable; without it a
+    send that goes nowhere cannot even be tried again."""
     tokens = client.load_tokens()
     if tenant_key in tokens:
-        tokens[tenant_key]["updates_buf"] = buf
+        tokens[tenant_key][field] = value
         client._TOKENS.write_text(json.dumps(tokens, ensure_ascii=False, indent=1),
                                   encoding="utf-8")
 
