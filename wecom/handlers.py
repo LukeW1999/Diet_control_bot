@@ -141,12 +141,7 @@ async def handle_text(user_id: str, text: str) -> None:
 
     if foodlog.FOOD_HINT.search(text):
         _food_reset(st)
-        send_text(user_id, "🍎 估算中...")
-        try:
-            send_text(user_id, await foodlog.log_text(text))
-        except Exception as e:
-            logger.exception("food estimate failed")
-            send_text(user_id, f"估算失败：{e}")
+        await _estimate_and_log(user_id, text)
         return
 
     correction = await analyst.detect_correction(text)
@@ -203,7 +198,7 @@ def _weight_date(text: str) -> date:
 
 async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
     """Grams for a looked-up barcode, or a description to estimate. True if handled."""
-    from llm.nutrition import scale_to_grams, format_scaled, format_estimate, per_100g_from_estimate
+    from llm.nutrition import scale_to_grams, format_scaled
     food = st["food"]
 
     menu = food.get("menu")
@@ -226,42 +221,31 @@ async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
         if grams is not None:
             canon, item_id = food["canon"], food["item_id"]
             _food_reset(st)
-            if item_id:
-                crud.record_food_use(item_id, grams)
-            scaled = scale_to_grams(canon, grams)
-            if foodlog.logs_to_server():
-                crud.add_food_entry(food.get("name") or "食物", f"{grams:g}g",
-                                    scaled["dietary_energy_kcal"], scaled["protein_g"],
-                                    scaled["carbs_g"], scaled["fat_g"])
-                send_text(user_id, f"✅ 已记录 {food.get('name')} {grams:g}g　"
-                                   f"{scaled['dietary_energy_kcal']:.0f} kcal\n\n"
-                                   f"{foodlog.today_line()}\n\n记错了发「撤回」")
-            else:
-                send_text(user_id, format_scaled(scaled))
+            send_text(user_id, foodlog.log_from_library(item_id, grams) if item_id
+                      else format_scaled(scale_to_grams(canon, grams)))
             _log({"type": "food_scaled", "user": user_id, "grams": grams})
             return True
         _food_reset(st)  # not an amount, treat it as an ordinary message
         return False
 
     if food.get("armed"):
+        # `/food` only still matters for a description with no amount in it, which
+        # `FOOD_HINT` cannot spot. Either way it is the same logging path.
         _food_reset(st)
-        send_text(user_id, "🍎 估算中...")
-        try:
-            from llm.foodsearch import estimate_food_text
-            est = await estimate_food_text(text)
-            reply = format_estimate(est)
-            keep = per_100g_from_estimate(est, text)
-            if keep:
-                crud.remember_food(*keep)
-                reply += f"\n📚 已存入食物库（{keep[0]}），下次 /foods 直接选"
-            send_text(user_id, reply)
-            _log({"type": "food_estimate", "user": user_id, "text": text})
-        except Exception as e:
-            logger.exception("food estimate failed")
-            send_text(user_id, f"估算失败：{e}")
+        await _estimate_and_log(user_id, text)
         return True
 
     return False
+
+
+async def _estimate_and_log(user_id: str, text: str) -> None:
+    send_text(user_id, "🍎 估算中...")
+    try:
+        send_text(user_id, await foodlog.log_text(text))
+        _log({"type": "food_estimate", "user": user_id, "text": text})
+    except Exception as e:
+        logger.exception("food estimate failed")
+        send_text(user_id, f"估算失败：{e}")
 
 
 async def handle_image(user_id: str, media_id: str) -> None:
