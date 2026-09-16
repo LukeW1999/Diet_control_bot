@@ -59,7 +59,19 @@ def save_token(tenant: str, token: str, bot_id: str, user_id: str) -> None:
 
 def send_text(token: str, to_user_id: str, context_token: str, text: str) -> dict:
     """`context_token` comes from the message being answered. Without it the reply
-    is not tied to the conversation it belongs to."""
+    is not tied to the conversation it belongs to.
+
+    A failure here used to be silent, which is the worst way for it to fail: the
+    user sees whatever went out first and nothing after.
+    """
+    result = _send(token, to_user_id, context_token, text)
+    if result.get("ret") not in (0, None):
+        logger.error("weixin send failed ret=%s errmsg=%s text=%.30s",
+                     result.get("ret"), result.get("errmsg"), text)
+    return result
+
+
+def _send(token: str, to_user_id: str, context_token: str, text: str) -> dict:
     return request("ilink/bot/sendmessage", {
         "msg": {
             "to_user_id": to_user_id,
