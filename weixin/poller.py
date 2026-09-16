@@ -13,18 +13,20 @@ from weixin import client, handlers
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "1.0.2"
-
-
 async def _loop(tenant_key: str, cfg: dict) -> None:
     token = cfg["token"]
     buf = cfg.get("updates_buf") or ""
+    try:
+        logger.info("notifystart %s → %s", tenant_key,
+                    await asyncio.to_thread(client.notify_start, token))
+    except Exception:
+        logger.exception("notifystart failed for %s", tenant_key)
     logger.info("weixin loop started for %s", tenant_key)
     while True:
         try:
             resp = await asyncio.to_thread(
                 client.request, "ilink/bot/getupdates",
-                {"get_updates_buf": buf, "base_info": {"channel_version": _VERSION}},
+                {"get_updates_buf": buf, "base_info": client.base_info()},
                 token, 60)
         except Exception:
             logger.exception("getupdates failed for %s", tenant_key)

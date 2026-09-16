@@ -42,6 +42,25 @@ def request(path: str, payload: dict | None = None, token: str | None = None,
     return json.loads(body) if body.strip() else {}
 
 
+# The server gates on what the client claims to be, so claim what the official
+# package claims. Sending an old version got messages accepted and never delivered.
+CHANNEL_VERSION = "2.4.8"
+BOT_AGENT = "OpenClaw"
+
+
+def base_info() -> dict:
+    return {"channel_version": CHANNEL_VERSION, "bot_agent": BOT_AGENT}
+
+
+def notify_start(token: str) -> dict:
+    """Register as online. Until this runs the server takes messages and drops them."""
+    return request("ilink/bot/msg/notifystart", {"base_info": base_info()}, token, 15)
+
+
+def notify_stop(token: str) -> dict:
+    return request("ilink/bot/msg/notifystop", {"base_info": base_info()}, token, 15)
+
+
 def load_tokens() -> dict:
     """{tenant: {token, bot_id, user_id}}. Kept out of `.env` because there is one
     per person and they are rotated by rescanning, not by editing config."""
