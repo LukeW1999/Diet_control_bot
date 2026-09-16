@@ -195,14 +195,20 @@ def partner_day() -> str:
     who = _PARTNER_LABEL.get(other, other)
     eaten = sum(e.energy_kcal or 0 for e in entries) or (
         record.total_calories if record else 0) or 0
-    lines = [f"👀 {who}今天吃了 {eaten:.0f} / {rc['low']}–{rc['high']} kcal"]
+    # "记了" rather than "吃了": all this knows is what was written down, and
+    # reporting a light day as if it were the whole of someone's eating reads as
+    # an accusation.
+    lines = [f"👀 {who}今天记了 {len(entries)} 笔，共 {eaten:.0f} kcal"
+             f"（目标 {rc['low']}–{rc['high']}）"]
     if entries:
         lines += [f"　• {e.name} {e.portion}　{(e.energy_kcal or 0):.0f} kcal"
                   for e in entries]
+        if eaten < rc["low"] * 0.5:
+            lines.append("（大概还有没记上的）")
     elif eaten:
         lines.append("（对方用 HealthKit 同步，看不到单项明细）")
     else:
-        lines.append("还没记东西。")
+        lines.append("今天还没记。")
     if body and body.weight_kg:
         lines.append(f"⚖️ 最新体重：{body.weight_kg} kg（{body.date}）")
     return "\n".join(lines)

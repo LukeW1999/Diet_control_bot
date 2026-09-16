@@ -174,9 +174,15 @@ def build_evening_text() -> str:
             f"📊 按此速度，每月预计减脂：{monthly_fat_loss:.2f} kg",
         ]
 
+    from utils import foodlog, tenant
+    # A light day of logging is not a light day of eating, and reading it back as
+    # though it were is the quickest way to make someone stop logging.
+    target = crud.recommend_calories()
+    if (diet.total_calories or 0) < target["low"] * 0.5:
+        lines.append("\n（今天记的比平常少，可能还有没记上的）")
+
     lines += _healthkit_handoff(diet)
 
-    from utils import foodlog, tenant
     if tenant.partner():
         lines.append("\n" + foodlog.partner_day())
     return "\n".join(lines)
