@@ -40,8 +40,9 @@ async def _loop(tenant_key: str, cfg: dict) -> None:
             # message_type 1 is the human; the bot's own messages come back too.
             if msg.get("message_type") != 1:
                 continue
-            logger.info("weixin msg from=%s to=%s", msg.get("from_user_id"),
-                        msg.get("to_user_id"))
+            logger.info("weixin msg %s", json.dumps(
+                {k: (v[:24] if isinstance(v, str) else v)
+                 for k, v in msg.items() if k != "item_list"}, ensure_ascii=False)[:300])
             tenant.set_current(tenant_key)
             try:
                 await handlers.handle_message(tenant_key, token, msg)
