@@ -96,7 +96,9 @@ def send_text(token: str, to_user_id: str, context_token: str, text: str) -> dic
         "item_list": [{"type": 1, "text_item": {"text": text}}],
         "context_token": context_token or None,
     }
-    result = request("ilink/bot/sendmessage", {"msg": msg}, token=token)
+    # The official client attaches base_info to every call, sendmessage included.
+    result = request("ilink/bot/sendmessage",
+                     {"msg": msg, "base_info": base_info()}, token=token)
     logger.info("weixin send → %s (text=%.20s)",
                 json.dumps(result, ensure_ascii=False)[:160], text)
     return result
