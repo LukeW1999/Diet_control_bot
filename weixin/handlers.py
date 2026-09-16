@@ -1,7 +1,8 @@
 """WeChat adapter.
 
-A reply has to carry the `context_token` of the message it answers, so `send` is
-bound per inbound message rather than per user.
+A reply spends the `context_token` of the message it answers, and there is only
+one per inbound message. So progress notes are dropped and the real answer is the
+single thing that goes out.
 """
 from utils import router
 from weixin import client
@@ -16,7 +17,9 @@ async def handle_message(tenant_key: str, token: str, msg: dict) -> None:
     if not text.strip():
         return
 
-    def send(reply: str) -> None:
+    def send(reply: str, progress: bool = False) -> None:
+        if progress:
+            return
         client.send_text(token, msg["from_user_id"], msg.get("context_token", ""), reply)
 
     await router.handle_text(tenant_key, send, text)

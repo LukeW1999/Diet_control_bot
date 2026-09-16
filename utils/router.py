@@ -1,7 +1,9 @@
 """Conversation routing, independent of which messenger carried the message.
 
 WeCom and WeChat both end up here; `send` is passed in because that is the only
-part that differs. Keeping one copy matters more than it looks: the transports
+part that differs. It takes `progress=True` for the "working on it" notes, which
+a transport is free to drop: a WeChat reply spends the inbound `context_token`,
+so sending one of those would leave the real answer with no way out. Keeping one copy matters more than it looks: the transports
 had already drifted once, and typed food silently stopped being logged on one of
 them for a day.
 """
@@ -251,7 +253,7 @@ async def _handle_food_text(key: str, send, st: dict, text: str) -> bool:
 
 
 async def _estimate_and_log(key: str, send, text: str) -> None:
-    send("🍎 估算中...")
+    send("🍎 估算中...", progress=True)
     try:
         send(await foodlog.log_text(text))
         _log({"type": "food_estimate", "user": key, "text": text})
@@ -267,7 +269,7 @@ async def handle_image(key: str, send, fetch_media) -> None:
         send("要记食物，先发 /food，再拍条码或文字描述这个食物。")
         return
 
-    send("🔎 正在识别条码...")
+    send("🔎 正在识别条码...", progress=True)
     try:
         from utils.barcode import decode as decode_barcode
         from llm.foodsearch import lookup_barcode
@@ -297,7 +299,7 @@ async def handle_image(key: str, send, fetch_media) -> None:
 
 
 async def _coach(key: str, send, st: dict, text: str, mode: str) -> None:
-    send("🏋️ 查询中...")
+    send("🏋️ 查询中...", progress=True)
     from bot.handlers import _build_context
     answer = await analyst.answer_question(text, _build_context(), history=list(st["history"]))
     send(answer)
@@ -306,7 +308,7 @@ async def _coach(key: str, send, st: dict, text: str, mode: str) -> None:
 
 
 async def _psychologist(key: str, send, st: dict, text: str, mode: str) -> None:
-    send("💬 思考中...")
+    send("💬 思考中...", progress=True)
     from utils.psych_memory import load_psych_memory
     answer = await analyst.answer_as_psychologist(text, load_psych_memory(),
                                                   history=list(st["history"]))
@@ -404,7 +406,7 @@ async def _handle_command(key: str, send, st: dict, text: str) -> None:
         else:
             send("还没有身体成分记录。")
     elif cmd == "/report":
-        send("正在生成周报...")
+        send("正在生成周报...", progress=True)
         from bot.handlers import _generate_report
         send(await _generate_report())
     else:
