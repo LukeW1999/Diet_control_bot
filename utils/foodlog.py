@@ -18,6 +18,12 @@ FOOD_HINT = re.compile(
 
 UNDO_WORDS = ("撤回", "记错了", "undo")          # drop the last thing logged
 LIST_WORDS = ("删除", "删除记录", "删掉", "删")   # choose which one to drop
+
+# WeChat has no menu, so the two things worth looking at have to be sayable.
+TODAY_WORDS = ("今天", "今日", "汇总", "总共", "一共", "多少")
+PARTNER_WORDS = ("她", "他", "对方", "ta", "TA", "Ta")
+
+FOOTER = "记错了发「撤回」，要删别的发「删除」\n发「今天」看汇总，发「她」看对方吃了什么"
 _PARTNER_LABEL = {"sjy": "她", "wangweiqi": "炜奇"}
 
 
@@ -73,7 +79,7 @@ async def log_text(description: str) -> str:
         lines.append(f"　• {i['name']} {i.get('portion','')}　{i.get('energy_kcal')} kcal")
     lines += [f"🔥 这一笔 {est.get('dietary_energy_kcal')} kcal　"
               f"🥩 蛋白 {est.get('protein_g')}g", "", today_line(), "",
-              "记错了发「撤回」；要删别的发「删除」"]
+              FOOTER]
     return "\n".join(lines)
 
 
@@ -166,7 +172,7 @@ def log_from_library(item_id: int, grams: float | None = None) -> str:
                         scaled["protein_g"], scaled["carbs_g"], scaled["fat_g"])
     return (f"✅ 已记录 {item.name} {grams:g}g　"
             f"{(scaled['dietary_energy_kcal'] or 0):.0f} kcal\n\n"
-            f"{today_line()}\n\n记错了发「撤回」；要删别的发「删除」")
+            f"{today_line()}\n\n{FOOTER}")
 
 
 def partner_day() -> str:

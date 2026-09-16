@@ -114,6 +114,15 @@ async def handle_text(key: str, send, text: str) -> None:
     if undo_n:
         send(foodlog.undo(int(undo_n.group(1))))
         return
+    if text in foodlog.TODAY_WORDS:
+        from bot.handlers import _build_today_summary
+        send(_build_today_summary(date.today()))
+        return
+
+    if text in foodlog.PARTNER_WORDS:
+        send(foodlog.partner_day())
+        return
+
     if text in foodlog.LIST_WORDS or text.lower() == "/undo":
         prompt, ids = foodlog.delete_prompt()
         st["food"]["delete_menu"] = ids

@@ -551,7 +551,9 @@ def _update_daily_summary_from_diet(session: Session, rec: DietRecord) -> None:
     protein_goal_per_kg = setting("protein_goal_per_kg", "USER_PROTEIN_GOAL_PER_KG", 1.8)
 
     body = session.scalar(select(BodyComposition).where(BodyComposition.date == rec.date))
-    weight = body.weight_kg if body else None
+    # Only the exact date used to count, so every day without a weigh-in had no
+    # protein goal at all and showed as "/ 0g".
+    weight = (body.weight_kg if body else None) or weight_on(rec.date)
     # Scientific BMR from height/age/weight, not Apple's synced resting energy.
     bmr = get_bmr(weight=weight)
     protein_goal = weight * protein_goal_per_kg if weight else None

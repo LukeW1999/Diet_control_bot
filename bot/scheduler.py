@@ -175,6 +175,10 @@ def build_evening_text() -> str:
         ]
 
     lines += _healthkit_handoff(diet)
+
+    from utils import foodlog, tenant
+    if tenant.partner():
+        lines.append("\n" + foodlog.partner_day())
     return "\n".join(lines)
 
 
