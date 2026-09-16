@@ -13,7 +13,8 @@ load_dotenv()
 MENU = {"button": [
     {"name": "🍎 记食物", "sub_button": [
         {"type": "click", "name": "开始记食物", "key": "/food"},
-        {"type": "click", "name": "食物库", "key": "/foods"},
+        {"type": "click", "name": "吃过的东西", "key": "/foods"},
+        {"type": "click", "name": "🗑️ 删除记录", "key": "/undo"},
     ]},
     {"name": "📊 数据", "sub_button": [
         {"type": "click", "name": "今日数据", "key": "/today"},

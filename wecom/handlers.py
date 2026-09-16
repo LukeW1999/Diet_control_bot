@@ -50,13 +50,15 @@ def _s(user_id: str) -> dict:
         "mode": "auto",
         "history": [],
         "food": {"armed": False, "canon": None, "name": None,
-                 "serving_g": None, "item_id": None},
+                 "serving_g": None, "item_id": None, "menu": None,
+                 "delete_menu": None},
     })
 
 
 def _food_reset(st: dict) -> None:
     st["food"] = {"armed": False, "canon": None, "name": None,
-                  "serving_g": None, "item_id": None}
+                  "serving_g": None, "item_id": None, "menu": None,
+                  "delete_menu": None}
 
 
 def _append_history(st: dict, user_text: str, assistant_text: str) -> None:
@@ -113,7 +115,12 @@ async def handle_text(user_id: str, text: str) -> None:
     if undo_n:
         send_text(user_id, foodlog.undo(int(undo_n.group(1))))
         return
-    if text in foodlog.UNDO_WORDS or text.lower() == "/undo":
+    if text.lower() == "/undo":
+        prompt, ids = foodlog.delete_prompt()
+        st["food"]["delete_menu"] = ids
+        send_text(user_id, prompt)
+        return
+    if text in foodlog.UNDO_WORDS:
         send_text(user_id, foodlog.undo())
         return
 
@@ -200,6 +207,14 @@ async def _handle_food_text(user_id: str, st: dict, text: str) -> bool:
     """Grams for a looked-up barcode, or a description to estimate. True if handled."""
     from llm.nutrition import scale_to_grams, format_scaled
     food = st["food"]
+
+    to_delete = food.get("delete_menu")
+    if to_delete:
+        m = re.match(r"^\s*(\d+)\s*$", text)
+        food["delete_menu"] = None
+        if m and 1 <= int(m.group(1)) <= len(to_delete):
+            send_text(user_id, foodlog.delete_by_id(to_delete[int(m.group(1)) - 1]))
+            return True
 
     menu = food.get("menu")
     if menu:

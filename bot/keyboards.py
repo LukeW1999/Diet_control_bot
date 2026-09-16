@@ -57,3 +57,15 @@ def tz_menu(current: str) -> InlineKeyboardMarkup:
         return InlineKeyboardButton(("✅ " if zone == current else "") + label,
                                     callback_data=f"tz_set:{zone}")
     return InlineKeyboardMarkup([[btn(l, z) for l, z in TZ_PRESETS]])
+
+
+def entry_delete_menu(entries: list) -> InlineKeyboardMarkup:
+    """One button per entry, labelled by time so two of the same food are telling
+    apart."""
+    from utils.foodlog import _local_time
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            f"{_local_time(e.created_at)} {e.name} {e.portion} "
+            f"{(e.energy_kcal or 0):.0f}kcal"[:60],
+            callback_data=f"del_entry:{e.id}")]
+        for e in entries])

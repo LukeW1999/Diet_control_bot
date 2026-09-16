@@ -14,7 +14,8 @@ from db import crud
 from llm import analyst
 from utils import foodlog
 from utils.media_store import save_document as _media_save_doc
-from .keyboards import main_menu, mode_menu, food_library_menu, tz_menu, MODE_LABELS
+from .keyboards import (main_menu, mode_menu, food_library_menu, entry_delete_menu,
+                        tz_menu, MODE_LABELS)
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +503,17 @@ async def cmd_tz(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(_tz_status(), reply_markup=tz_menu(_current_tz()))
 
 
+async def cmd_undo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pick which entry to drop, rather than only ever the newest."""
+    if not _allowed(update):
+        return
+    entries = crud.get_food_entries()
+    if not entries:
+        await update.message.reply_text("今天还没记东西，没有可删的。")
+        return
+    await update.message.reply_text("🗑️ 删哪一笔？", reply_markup=entry_delete_menu(entries))
+
+
 async def cmd_partner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """What the other half ate today."""
     if not _allowed(update):
@@ -893,6 +905,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "food_lib":
         text, markup = _library_view()
         await query.edit_message_text(text, reply_markup=markup)
+        return
+
+    if data.startswith("del_entry:"):
+        await query.edit_message_text(foodlog.delete_by_id(int(data.split(":")[1])))
         return
 
     if data.startswith("food_pick:"):

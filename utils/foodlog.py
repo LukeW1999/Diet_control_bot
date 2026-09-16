@@ -76,14 +76,47 @@ async def log_text(description: str) -> str:
     return "\n".join(lines)
 
 
+def _local_time(stamp) -> str:
+    """`created_at` is naive UTC; two people here are seven hours apart, so it has
+    to be shown where they are or the times mean nothing."""
+    if stamp is None:
+        return ""
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+    profile = crud.get_user_profile()
+    zone = (profile.timezone if profile and profile.timezone else None) or "Europe/London"
+    return stamp.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(zone)).strftime("%H:%M")
+
+
 def entries_list(entries=None) -> str:
-    """Numbered, because "撤回 2" needs the numbers to mean something."""
+    """Numbered and timed, so "第几笔" and "几点那笔" both pick the same thing."""
     entries = crud.get_food_entries() if entries is None else entries
     if not entries:
         return "今天还没记东西。"
     return "\n".join(
-        f"　{i}. {e.name} {e.portion}　{(e.energy_kcal or 0):.0f} kcal"
+        f"　{i}. {_local_time(e.created_at)}　{e.name} {e.portion}　"
+        f"{(e.energy_kcal or 0):.0f} kcal"
         for i, e in enumerate(entries, 1))
+
+
+def delete_prompt() -> tuple[str, list[int]]:
+    """The list to choose from, and the ids behind it so a later reply still maps to
+    the row it showed even if something else changed in between."""
+    entries = crud.get_food_entries()
+    if not entries:
+        return "今天还没记东西，没有可删的。", []
+    return ("🗑️ 删哪一笔？回数字：\n" + entries_list(entries),
+            [e.id for e in entries])
+
+
+def delete_by_id(entry_id: int) -> str:
+    entry = crud.delete_food_entry(entry_id)
+    if entry is None:
+        return "这一笔已经不在了。"
+    remaining = crud.get_food_entries()
+    return (f"🗑️ 已删除：{entry.name} {entry.portion}"
+            f"（{(entry.energy_kcal or 0):.0f} kcal）\n\n{today_line()}"
+            + ("\n\n剩下的：\n" + entries_list(remaining) if remaining else ""))
 
 
 def undo(index: int | None = None) -> str:
