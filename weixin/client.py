@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import time
 import urllib.error
 import urllib.request
 from base64 import b64encode
@@ -57,28 +58,26 @@ def save_token(tenant: str, token: str, bot_id: str, user_id: str) -> None:
     _TOKENS.chmod(0o600)
 
 
-def send_text(token: str, to_user_id: str, context_token: str, text: str,
-              reply_to: dict | None = None) -> dict:
+def send_text(token: str, to_user_id: str, context_token: str, text: str) -> dict:
     """`context_token` comes from the message being answered. Without it the reply
     is not tied to the conversation it belongs to.
 
     A failure here used to be silent, which is the worst way for it to fail: the
     user sees whatever went out first and nothing after.
     """
+    # Shape taken from @tencent-weixin/openclaw-weixin 2.4.8 (messaging/send.js).
+    # Without `client_id` the server still answers with a message_id and the
+    # message never arrives, so a missing one looks exactly like success.
     msg = {
+        "from_user_id": "",
         "to_user_id": to_user_id,
-        "message_type": 2,   # from the bot
-        "message_state": 2,  # complete message
-        "context_token": context_token,
+        "client_id": f"health-bot:{int(time.time() * 1000)}-{os.urandom(4).hex()}",
+        "message_type": 2,   # BOT
+        "message_state": 2,  # FINISH
         "item_list": [{"type": 1, "text_item": {"text": text}}],
+        "context_token": context_token or None,
     }
-    # Thread the reply onto the message it answers. Omitting these looked fine and
-    # sent nothing, so log the whole response until the shape is certain.
-    for field in ("session_id", "root_id", "parent_id"):
-        if reply_to and reply_to.get(field):
-            msg[field] = reply_to[field]
     result = request("ilink/bot/sendmessage", {"msg": msg}, token=token)
-    logger.info("weixin send → %s (fields=%s, text=%.20s)",
-                json.dumps(result, ensure_ascii=False)[:200],
-                sorted(msg.keys()), text)
+    logger.info("weixin send → %s (text=%.20s)",
+                json.dumps(result, ensure_ascii=False)[:160], text)
     return result

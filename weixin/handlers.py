@@ -20,7 +20,6 @@ async def handle_message(tenant_key: str, token: str, msg: dict) -> None:
     def send(reply: str, progress: bool = False) -> None:
         if progress:
             return
-        client.send_text(token, msg["from_user_id"], msg.get("context_token", ""),
-                         reply, reply_to=msg)
+        client.send_text(token, msg["from_user_id"], msg.get("context_token", ""), reply)
 
     await router.handle_text(tenant_key, send, text)
