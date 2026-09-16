@@ -70,8 +70,18 @@ def _remember(tenant_key: str, field: str, value: str) -> None:
 
 
 async def run() -> None:
-    tokens = client.load_tokens()
-    if not tokens:
-        logger.warning("no bound WeChat accounts; nothing to poll")
-        return
-    await asyncio.gather(*(_loop(k, v) for k, v in tokens.items()))
+    """Watch for rebinding too. Scanning again mints a new bot, and until this
+    noticed, the old dead one was still being polled."""
+    running: dict[str, tuple[str, asyncio.Task]] = {}
+    while True:
+        for key, cfg in client.load_tokens().items():
+            known = running.get(key)
+            if known and known[0] == cfg["token"] and not known[1].done():
+                continue
+            if known:
+                logger.info("%s rebound; restarting its loop", key)
+                known[1].cancel()
+            running[key] = (cfg["token"], asyncio.create_task(_loop(key, cfg)))
+        if not running:
+            logger.warning("no bound WeChat accounts yet")
+        await asyncio.sleep(30)
